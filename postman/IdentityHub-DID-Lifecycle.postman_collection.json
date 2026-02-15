@@ -1,0 +1,1016 @@
+{
+  "info": {
+    "name": "Identity Hub - Casos de Uso",
+    "description": "# Identity Hub - Suite de pruebas por casos de uso\n\nColeccion completa para probar la Identity API del Eclipse EDC Identity Hub.\n\nCada carpeta representa un **caso de uso (CU)** independiente con sus peticiones ordenadas secuencialmente. Se pueden ejecutar todos los casos de uso en orden con el Collection Runner de Postman.\n\n## Requisitos previos\n\n### 1. Compilar el launcher de desarrollo\n\n```bash\n./gradlew :launcher:identityhub-dev:shadowJar\n```\n\n### 2. Arrancar el Identity Hub\n\n```bash\njava -Dweb.http.port=8181 \\\n     -Dweb.http.path=\"/api\" \\\n     -Dweb.http.identity.port=8182 \\\n     -Dweb.http.identity.path=\"/api/identity\" \\\n     -Dweb.http.credentials.port=10001 \\\n     -Dweb.http.credentials.path=\"/api/credentials\" \\\n     -Dedc.iam.did.web.use.https=false \\\n     -Dedc.iam.sts.publickey.id=test-public-key \\\n     -Dedc.iam.sts.privatekey.alias=super-user-alias \\\n     -Dedc.encryption.strict=false \\\n     -jar launcher/identityhub-dev/build/libs/identity-hub-dev.jar\n```\n\n### 3. Copiar el API Key del super-user\n\nAl arrancar, los logs muestran:\n```\n[SuperUserSeedExtension] Super-user API Key: YWNtZS1jb3Jw.xxxxx...\n```\n\nCopiar ese valor y pegarlo en la variable `superUserToken` de esta coleccion.\n\n## Autenticacion\n\nTodas las peticiones requieren la cabecera `x-api-key`.\n\nEl formato del token es: `base64(participantContextId) + \".\" + base64(randomBytes)`.\n\nLos IDs de participante en las URLs van codificados en **Base64**. Los scripts de la coleccion calculan esto automaticamente.\n\n## Casos de uso incluidos\n\n| Carpeta | Caso de uso | Descripcion |\n|---------|-------------|-------------|\n| CU1 | Onboarding paso a paso | Crear participante inactivo, verificar DID GENERATED, activar, verificar DID PUBLISHED |\n| CU2 | Onboarding directo | Crear participante con `active: true` (auto-publish) |\n| CU3 | Rotacion de claves | Listar claves, rotar, verificar DID actualizado, revocar |\n| CU4 | Service endpoints | Anadir, actualizar y eliminar service endpoints del DID Document |\n| CU5 | Desactivacion temporal | Desactivar participante, verificar DID UNPUBLISHED, reactivar |\n| CU6 | Baja definitiva | Eliminar participante (cascada irreversible) |\n| CU7 | Admin multi-tenant | Vision global de participantes, DIDs y claves |\n| CU8 | Regenerar token | Regenerar API key por compromiso de credenciales |\n| CU9 | Gestion de roles | Asignar y quitar roles de administrador |\n| Cleanup | Limpieza | Eliminar participantes de prueba |",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8182/api/identity", "description": "URL base de la Identity API" },
+    { "key": "healthUrl", "value": "http://localhost:8181/api", "description": "URL base de la API de gestion (health check)" },
+    { "key": "superUserToken", "value": "PEGA_AQUI_EL_TOKEN_DE_LOS_LOGS", "description": "API Key del super-user (obtenida de los logs al arrancar)" },
+    { "key": "participantToken", "value": "", "description": "API Key del participante acme-corp (se guarda automaticamente)" },
+    { "key": "participantId", "value": "acme-corp", "description": "ID del participante de prueba para CU1" },
+    { "key": "participantDid", "value": "did:web:acme-corp", "description": "DID del participante de prueba para CU1" },
+    { "key": "participantIdBase64", "value": "", "description": "participantId codificado en Base64 (calculado automaticamente)" },
+    { "key": "keyPairId", "value": "", "description": "UUID del KeyPair activo (se guarda automaticamente en CU3)" },
+    { "key": "activeParticipantId", "value": "fast-corp", "description": "ID del participante de prueba para CU2 (onboarding directo)" },
+    { "key": "activeParticipantDid", "value": "did:web:fast-corp", "description": "DID del participante de prueba para CU2" },
+    { "key": "activeParticipantIdBase64", "value": "", "description": "activeParticipantId codificado en Base64 (calculado automaticamente)" }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "exec": [
+          "// Calcula Base64 de los IDs de participante para usar en las URLs",
+          "pm.variables.set('participantIdBase64', btoa(pm.collectionVariables.get('participantId')));",
+          "pm.variables.set('activeParticipantIdBase64', btoa(pm.collectionVariables.get('activeParticipantId')));"
+        ],
+        "type": "text/javascript"
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Health Check",
+      "description": "# Verificacion inicial\n\nComprueba que el Identity Hub esta arrancado y respondiendo.\n\nAdemas, calcula los valores Base64 de los IDs de participante y los guarda en las variables de la coleccion para que esten disponibles en todas las peticiones posteriores.\n\n**Ejecutar siempre antes de los demas casos de uso.**",
+      "item": [
+        {
+          "name": "Health Check",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Identity Hub esta arrancado', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "// Precalcular Base64 de IDs y guardarlos como variables de coleccion",
+            "pm.collectionVariables.set('participantIdBase64', btoa(pm.collectionVariables.get('participantId')));",
+            "pm.collectionVariables.set('activeParticipantIdBase64', btoa(pm.collectionVariables.get('activeParticipantId')));",
+            "",
+            "console.log('participantIdBase64 =', pm.collectionVariables.get('participantIdBase64'));",
+            "console.log('activeParticipantIdBase64 =', pm.collectionVariables.get('activeParticipantIdBase64'));",
+            "console.log('Variables Base64 calculadas. Listo para ejecutar los casos de uso.');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{healthUrl}}/check/health", "host": ["{{healthUrl}}"], "path": ["check", "health"] },
+            "description": "Verifica que el servidor esta respondiendo. No requiere autenticacion.\n\nSi devuelve 200, el Identity Hub esta listo.\n\nEste endpoint tambien precalcula las variables Base64 necesarias para las URLs."
+          }
+        }
+      ]
+    },
+    {
+      "name": "CU1: Onboarding paso a paso",
+      "description": "# CU1: Onboarding de un nuevo participante\n\n## Escenario\n\nUna nueva organizacion (acme-corp) se une al dataspace. El administrador crea su contexto de forma **inactiva**, verifica que el DID se ha generado correctamente, y luego lo activa para publicar su identidad.\n\n## Flujo\n\n```\n1.1 Crear participante (inactivo)     -> ParticipantContext CREATED, DID GENERATED\n1.2 Verificar DID en GENERATED        -> Confirmar que el DID existe pero no es publico\n1.3 Activar participante               -> ParticipantContext ACTIVATED, DID PUBLISHED\n1.4 Verificar DID en PUBLISHED         -> Confirmar que el DID es resoluble publicamente\n1.5 Ver DID Document completo          -> Inspeccionar verificationMethod y service endpoints\n```\n\n## Que sucede internamente\n\n- Al crear con `active: false`, se genera el par de claves EC P-256 y el DID Document, pero NO se publica\n- Al activar, `DidDocumentServiceImpl` escucha el evento `ParticipantContextUpdated` y llama a `publish(did)`\n- `LocalDidPublisher` transiciona el DID a estado `PUBLISHED` y lo hace accesible via HTTP\n\n## Prerequisitos\n\n- Identity Hub arrancado\n- `superUserToken` configurado\n- Health Check ejecutado (para calcular Base64)",
+      "item": [
+        {
+          "name": "1.1 Crear participante (inactivo)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Participante creado (201 o 200)', function () {",
+            "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+            "});",
+            "",
+            "var json = pm.response.json();",
+            "",
+            "pm.test('La respuesta contiene apiKey', function () {",
+            "    pm.expect(json).to.have.property('apiKey');",
+            "});",
+            "",
+            "pm.test('La respuesta contiene clientId', function () {",
+            "    pm.expect(json).to.have.property('clientId');",
+            "});",
+            "",
+            "// Guardar el token del participante para usarlo en CU8",
+            "if (json.apiKey) {",
+            "    pm.collectionVariables.set('participantToken', json.apiKey);",
+            "    console.log('Variable participantToken guardada automaticamente');",
+            "}",
+            "",
+            "console.log('apiKey:', json.apiKey);",
+            "console.log('clientId:', json.clientId);",
+            "console.log('clientSecret:', json.clientSecret);",
+            "console.log('');",
+            "console.log('El DID deberia estar en GENERATED (no publicado aun)');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"participantContextId\": \"{{participantId}}\",\n  \"did\": \"{{participantDid}}\",\n  \"active\": false,\n  \"roles\": [],\n  \"keys\": [{\n    \"keyId\": \"acme-key-1\",\n    \"privateKeyAlias\": \"acme-alias-1\",\n    \"keyGeneratorParams\": {\n      \"algorithm\": \"EC\",\n      \"curve\": \"secp256r1\"\n    },\n    \"active\": true\n  }],\n  \"serviceEndpoints\": [{\n    \"id\": \"credential-service\",\n    \"type\": \"CredentialService\",\n    \"serviceEndpoint\": \"http://acme.example.com/api/credentials\"\n  }]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", ""] },
+            "description": "## Crear participante inactivo\n\n**Endpoint:** `POST /v1alpha/participants/`\n\n**Autenticacion:** `x-api-key` del super-user (rol admin)\n\n### Que hace\n\nCrea un nuevo `ParticipantContext` con:\n- **Estado:** `CREATED` (inactivo)\n- **Clave:** Par EC P-256 generado automaticamente\n- **DID Document:** Creado con `verificationMethod` y `service`, en estado `GENERATED`\n- **API Key:** Token unico generado para este participante\n\n### Parametros del body\n\n| Campo | Valor | Descripcion |\n|-------|-------|-------------|\n| `participantContextId` | `acme-corp` | Identificador unico del participante |\n| `did` | `did:web:acme-corp` | DID del participante (metodo did:web) |\n| `active` | `false` | **NO activar ni publicar automaticamente** |\n| `keys[0].keyGeneratorParams` | `EC / secp256r1` | Genera par de claves ECDSA P-256 |\n| `serviceEndpoints[0]` | `CredentialService` | Endpoint de credenciales publicado en el DID Document |\n\n### Respuesta esperada (201)\n\n```json\n{\n  \"apiKey\": \"YWNtZS1jb3Jw.xxx...\",\n  \"clientId\": \"did:web:acme-corp\",\n  \"clientSecret\": \"xxx...\"\n}\n```\n\n### Script de test\n\n- Verifica status 201/200\n- Verifica que la respuesta tiene `apiKey` y `clientId`\n- **Guarda `apiKey` en la variable `participantToken`** para usarlo en CU8"
+          }
+        },
+        {
+          "name": "1.2 Verificar DID en GENERATED",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var state = pm.response.text();",
+            "",
+            "pm.test('DID esta en estado GENERATED', function () {",
+            "    pm.expect(state).to.include('GENERATED');",
+            "});",
+            "",
+            "console.log('Estado del DID:', state);",
+            "console.log('El DID existe pero NO es resoluble publicamente');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"did\": \"{{participantDid}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/state", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "state"] },
+            "description": "## Consultar estado del DID\n\n**Endpoint:** `POST /v1alpha/participants/{id}/dids/state`\n\n### Que verifica\n\nTras la creacion con `active: false`, el DID debe estar en estado **GENERATED**.\n\nEsto significa que:\n- El DID Document existe en la base de datos\n- Tiene su `verificationMethod` con la clave publica\n- **NO es resoluble publicamente** (no esta en el VDR)\n\n### Estados posibles del DID\n\n| Estado | Codigo | Significado |\n|--------|--------|-------------|\n| INITIAL | 100 | Estado inicial (antes de generar) |\n| GENERATED | 200 | Generado pero no publicado |\n| PUBLISHED | 300 | Publicado y resoluble |\n| UNPUBLISHED | 400 | Despublicado |\n\n### Respuesta esperada\n\n```\n\"GENERATED\"\n```"
+          }
+        },
+        {
+          "name": "1.3 Activar participante (publica DID)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Participante activado (204)', function () {",
+            "    pm.response.to.have.status(204);",
+            "});",
+            "",
+            "console.log('ParticipantContext -> ACTIVATED');",
+            "console.log('Evento ParticipantContextUpdated emitido');",
+            "console.log('DidDocumentServiceImpl publica todos los DIDs');",
+            "console.log('DID -> PUBLISHED');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/state?isActive=true",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "state"],
+              "query": [{ "key": "isActive", "value": "true" }]
+            },
+            "description": "## Activar participante\n\n**Endpoint:** `POST /v1alpha/participants/{id}/state?isActive=true`\n\n### Que hace internamente\n\n1. `ParticipantContext` transiciona de `CREATED` a **`ACTIVATED`**\n2. Se emite el evento `ParticipantContextUpdated`\n3. `DidDocumentServiceImpl` escucha el evento y llama a `publish(did)` para todos los DIDs del participante\n4. `LocalDidPublisher` transiciona cada DID a **`PUBLISHED`**\n5. El DID Document queda accesible via HTTP\n\n### Respuesta esperada\n\n`204 No Content` — operacion exitosa sin cuerpo de respuesta"
+          }
+        },
+        {
+          "name": "1.4 Verificar DID en PUBLISHED",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var state = pm.response.text();",
+            "",
+            "pm.test('DID esta en estado PUBLISHED', function () {",
+            "    pm.expect(state).to.include('PUBLISHED');",
+            "});",
+            "",
+            "console.log('Estado del DID:', state);",
+            "console.log('El DID ahora ES resoluble publicamente');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"did\": \"{{participantDid}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/state", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "state"] },
+            "description": "## Verificar que el DID se ha publicado\n\n**Endpoint:** `POST /v1alpha/participants/{id}/dids/state`\n\n### Que verifica\n\nTras activar el participante en el paso 1.3, el DID debe haber transicionado automaticamente a **PUBLISHED**.\n\n### Respuesta esperada\n\n```\n\"PUBLISHED\"\n```\n\nSi el estado sigue siendo `GENERATED`, algo fallo en la activacion del participante."
+          }
+        },
+        {
+          "name": "1.5 Ver DID Document completo",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var docs = pm.response.json();",
+            "",
+            "pm.test('La respuesta es un array con al menos un DID Document', function () {",
+            "    pm.expect(docs).to.be.an('array').that.is.not.empty;",
+            "});",
+            "",
+            "if (docs.length > 0) {",
+            "    pm.test('El DID Document tiene verificationMethod', function () {",
+            "        pm.expect(docs[0]).to.have.property('verificationMethod');",
+            "        pm.expect(docs[0].verificationMethod).to.be.an('array').that.is.not.empty;",
+            "    });",
+            "",
+            "    pm.test('El DID Document tiene service endpoints', function () {",
+            "        pm.expect(docs[0]).to.have.property('service');",
+            "        pm.expect(docs[0].service).to.be.an('array').that.is.not.empty;",
+            "    });",
+            "",
+            "    console.log('DID Document:');",
+            "    console.log(JSON.stringify(docs[0], null, 2));",
+            "}"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"offset\": 0,\n  \"limit\": 50\n}" },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/query", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "query"] },
+            "description": "## Consultar DID Document completo\n\n**Endpoint:** `POST /v1alpha/participants/{id}/dids/query`\n\n### Que devuelve\n\nEl DID Document W3C completo, incluyendo:\n\n- **`id`**: El DID (ej. `did:web:acme-corp`)\n- **`@context`**: Contextos JSON-LD del DID\n- **`verificationMethod`**: Array con las claves publicas (tipo `JsonWebKey2020` con `publicKeyJwk`)\n- **`authentication`**: Referencias a los metodos de verificacion\n- **`service`**: Array con los service endpoints (CredentialService, etc.)\n\n### Ejemplo de respuesta\n\n```json\n[{\n  \"id\": \"did:web:acme-corp\",\n  \"@context\": [\"https://www.w3.org/ns/did/v1\"],\n  \"verificationMethod\": [{\n    \"id\": \"did:web:acme-corp#acme-key-1\",\n    \"type\": \"JsonWebKey2020\",\n    \"controller\": \"did:web:acme-corp\",\n    \"publicKeyJwk\": { \"kty\": \"EC\", \"crv\": \"P-256\", ... }\n  }],\n  \"service\": [{\n    \"id\": \"credential-service\",\n    \"type\": \"CredentialService\",\n    \"serviceEndpoint\": \"http://acme.example.com/api/credentials\"\n  }]\n}]\n```\n\n### Script de test\n\n- Verifica que hay al menos un DID Document\n- Verifica que tiene `verificationMethod` y `service`\n- Imprime el documento completo en la consola"
+          }
+        }
+      ]
+    },
+    {
+      "name": "CU2: Onboarding directo (auto-publish)",
+      "description": "# CU2: Onboarding directo con auto-publish\n\n## Escenario\n\nSe quiere crear un participante (fast-corp) y que su DID sea visible **inmediatamente**, sin necesidad de activarlo manualmente.\n\n## Flujo\n\n```\n2.1 Crear participante con active=true  -> Todo en una sola peticion\n2.2 Verificar DID directamente PUBLISHED -> Confirmar publicacion inmediata\n```\n\n## Diferencia con CU1\n\nCon `active: true` en el manifest, todo sucede en una sola peticion:\n1. Creacion del ParticipantContext\n2. Generacion del par de claves\n3. Creacion del DID Document\n4. **Activacion automatica**\n5. **Publicacion automatica del DID**\n\n## Cuando usar este flujo\n\n- Entornos de desarrollo y pruebas\n- Cuando no se necesita verificacion intermedia\n- Onboarding masivo de participantes",
+      "item": [
+        {
+          "name": "2.1 Crear participante activo (auto-publish)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Participante creado (201 o 200)', function () {",
+            "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+            "});",
+            "",
+            "var json = pm.response.json();",
+            "",
+            "pm.test('La respuesta contiene apiKey', function () {",
+            "    pm.expect(json).to.have.property('apiKey');",
+            "});",
+            "",
+            "console.log('Participante creado con active=true');",
+            "console.log('El DID se ha publicado automaticamente');",
+            "console.log('apiKey:', json.apiKey);"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"participantContextId\": \"{{activeParticipantId}}\",\n  \"did\": \"{{activeParticipantDid}}\",\n  \"active\": true,\n  \"roles\": [],\n  \"keys\": [{\n    \"keyId\": \"fast-corp-key\",\n    \"privateKeyAlias\": \"fast-corp-alias\",\n    \"keyGeneratorParams\": {\n      \"algorithm\": \"EC\",\n      \"curve\": \"secp256r1\"\n    },\n    \"active\": true\n  }],\n  \"serviceEndpoints\": [{\n    \"id\": \"credential-service\",\n    \"type\": \"CredentialService\",\n    \"serviceEndpoint\": \"http://fast-corp.example.com/api/credentials\"\n  }]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", ""] },
+            "description": "## Crear participante con auto-publish\n\n**Endpoint:** `POST /v1alpha/participants/`\n\n### Diferencia clave\n\nEl campo `active` esta a **`true`**. Esto dispara toda la cadena automaticamente:\n\n1. `ParticipantContext` -> `CREATED` -> `ACTIVATED`\n2. Par de claves EC P-256 generado\n3. DID Document creado -> `GENERATED` -> `PUBLISHED`\n\n### Respuesta esperada (201)\n\n```json\n{\n  \"apiKey\": \"ZmFzdC1jb3Jw.xxx...\",\n  \"clientId\": \"did:web:fast-corp\",\n  \"clientSecret\": \"xxx...\"\n}\n```"
+          }
+        },
+        {
+          "name": "2.2 Verificar DID directamente PUBLISHED",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var state = pm.response.text();",
+            "",
+            "pm.test('DID esta en PUBLISHED (publicado directamente)', function () {",
+            "    pm.expect(state).to.include('PUBLISHED');",
+            "});",
+            "",
+            "console.log('Estado del DID:', state);",
+            "console.log('Con active=true, el DID se publico automaticamente sin paso intermedio');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"did\": \"{{activeParticipantDid}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{activeParticipantIdBase64}}/dids/state", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{activeParticipantIdBase64}}", "dids", "state"] },
+            "description": "## Verificar publicacion inmediata\n\n**Endpoint:** `POST /v1alpha/participants/{id}/dids/state`\n\n### Que verifica\n\nQue el DID paso directamente a **PUBLISHED** sin necesidad de una llamada separada de activacion.\n\nA diferencia del CU1, aqui no deberia haber pasado por un estado intermedio visible `GENERATED`.\n\n### Respuesta esperada\n\n```\n\"PUBLISHED\"\n```"
+          }
+        }
+      ]
+    },
+    {
+      "name": "CU3: Rotacion de claves",
+      "description": "# CU3: Rotacion de claves criptograficas\n\n## Escenario\n\nLa politica de seguridad exige rotar las claves criptograficas periodicamente. Se rota la clave activa, se genera una sucesora, y se actualiza el DID Document automaticamente.\n\n## Flujo\n\n```\n3.1 Listar KeyPairs             -> Obtener el ID de la clave activa\n3.2 Rotar KeyPair                -> Clave antigua ROTATED, nueva clave creada\n3.3 Verificar DID actualizado    -> Nuevo verificationMethod en el DID Document\n3.4 Listar KeyPairs post-rotacion -> Ver ambas claves y sus estados\n3.5 Revocar clave antigua         -> Eliminar verificationMethod antiguo del DID\n```\n\n## Que sucede internamente al rotar\n\n1. La clave antigua pasa a estado `ROTATED`\n2. Su clave privada **se destruye** del vault (ya no puede firmar)\n3. Se crea una nueva clave sucesora con estado `ACTIVE`\n4. Se emite evento `KeyPairActivated`\n5. `DidDocumentServiceImpl` anade el nuevo `verificationMethod` al DID Document\n6. Se auto-publica el DID Document actualizado\n\n## Que sucede al revocar\n\n1. La clave pasa de `ROTATED` a `REVOKED`\n2. Se emite evento `KeyPairRevoked`\n3. `DidDocumentServiceImpl` **elimina** el `verificationMethod` antiguo del DID Document\n\n## Estados de KeyPair\n\n| Estado | Codigo | Puede firmar | verificationMethod en DID |\n|--------|--------|-------------|---------------------------|\n| CREATED | 100 | No | No |\n| ACTIVE | 200 | Si | Si |\n| ROTATED | 300 | No | Si (mientras no se revoque) |\n| REVOKED | 400 | No | No |\n\n## Prerequisitos\n\n- CU1 ejecutado (participante acme-corp creado y activado)",
+      "item": [
+        {
+          "name": "3.1 Listar KeyPairs",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var kps = pm.response.json();",
+            "",
+            "pm.test('Hay al menos un KeyPair', function () {",
+            "    pm.expect(kps).to.be.an('array').that.is.not.empty;",
+            "});",
+            "",
+            "if (Array.isArray(kps) && kps.length > 0) {",
+            "    // Guardar el ID del primer keypair para usarlo en rotacion/revocacion",
+            "    pm.collectionVariables.set('keyPairId', kps[0].id);",
+            "    console.log('Variable keyPairId guardada:', kps[0].id);",
+            "    console.log('Estado actual:', kps[0].state);",
+            "    console.log('keyId:', kps[0].keyId);",
+            "    console.log('Es default:', kps[0].defaultPair);",
+            "}"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/keypairs", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "keypairs"] },
+            "description": "## Listar claves del participante\n\n**Endpoint:** `GET /v1alpha/participants/{id}/keypairs`\n\n### Que hace\n\nObtiene todos los `KeyPairResource` del participante. Cada uno contiene:\n\n- `id`: UUID del recurso (necesario para rotar/revocar)\n- `keyId`: Identificador de la clave (aparece en el verificationMethod)\n- `state`: Estado actual (100=CREATED, 200=ACTIVE, 300=ROTATED, 400=REVOKED)\n- `defaultPair`: Si es la clave por defecto\n- `privateKeyAlias`: Alias en el vault\n- `serializedPublicKey`: Clave publica en JWK\n\n### Script de test\n\n- **Guarda `keyPairId`** del primer keypair para usarlo en 3.2 y 3.5"
+          }
+        },
+        {
+          "name": "3.2 Rotar KeyPair (genera sucesora)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Clave rotada (204)', function () {",
+            "    pm.response.to.have.status(204);",
+            "});",
+            "",
+            "console.log('Clave antigua -> ROTATED (clave privada destruida del vault)');",
+            "console.log('Nueva clave acme-key-rotated -> ACTIVE');",
+            "console.log('DID Document actualizado con nuevo verificationMethod');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"keyId\": \"acme-key-rotated\",\n  \"privateKeyAlias\": \"acme-alias-rotated\",\n  \"keyGeneratorParams\": {\n    \"algorithm\": \"EC\",\n    \"curve\": \"secp256r1\"\n  },\n  \"active\": true\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/keypairs/{{keyPairId}}/rotate", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "keypairs", "{{keyPairId}}", "rotate"] },
+            "description": "## Rotar una clave\n\n**Endpoint:** `POST /v1alpha/participants/{id}/keypairs/{keyPairId}/rotate`\n\n### Que hace\n\nRota la clave identificada por `{{keyPairId}}` y genera una nueva clave sucesora.\n\n### Body: descriptor de la nueva clave\n\n| Campo | Valor | Descripcion |\n|-------|-------|-------------|\n| `keyId` | `acme-key-rotated` | ID de la nueva clave |\n| `privateKeyAlias` | `acme-alias-rotated` | Alias en vault de la nueva clave |\n| `keyGeneratorParams` | EC/secp256r1 | Misma curva que la original |\n| `active` | `true` | La nueva clave se activa inmediatamente |\n\n### Efectos\n\n- Clave antigua: **ROTATED** (clave privada eliminada del vault)\n- Nueva clave: **ACTIVE**\n- DID Document: nuevo `verificationMethod` anadido automaticamente\n\n### Respuesta esperada\n\n`204 No Content`"
+          }
+        },
+        {
+          "name": "3.3 Verificar DID actualizado (nuevo verificationMethod)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var docs = pm.response.json();",
+            "",
+            "if (docs.length > 0 && docs[0].verificationMethod) {",
+            "    pm.test('DID Document tiene al menos 2 verificationMethods', function () {",
+            "        pm.expect(docs[0].verificationMethod.length).to.be.at.least(2);",
+            "    });",
+            "",
+            "    console.log('verificationMethods en el DID Document:');",
+            "    docs[0].verificationMethod.forEach(function(vm, i) {",
+            "        console.log('  [' + i + '] ' + vm.id);",
+            "    });",
+            "}"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"offset\": 0,\n  \"limit\": 50\n}" },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/query", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "query"] },
+            "description": "## Verificar DID Document tras rotacion\n\n**Endpoint:** `POST /v1alpha/participants/{id}/dids/query`\n\n### Que verifica\n\nTras rotar la clave, el DID Document debe tener **2 verificationMethods**:\n\n1. El antiguo (de la clave rotada, aun visible hasta que se revoque)\n2. El nuevo (de la clave sucesora `acme-key-rotated`)\n\nEsto es correcto porque una clave en estado `ROTATED` mantiene su verificationMethod en el DID Document hasta que se revoca explicitamente."
+          }
+        },
+        {
+          "name": "3.4 Listar KeyPairs post-rotacion",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var kps = pm.response.json();",
+            "",
+            "pm.test('Hay al menos 2 KeyPairs', function () {",
+            "    pm.expect(kps).to.be.an('array');",
+            "    pm.expect(kps.length).to.be.at.least(2);",
+            "});",
+            "",
+            "console.log('KeyPairs despues de la rotacion:');",
+            "kps.forEach(function(kp, i) {",
+            "    var stateNames = { 100: 'CREATED', 200: 'ACTIVE', 300: 'ROTATED', 400: 'REVOKED' };",
+            "    console.log('  [' + i + '] ' + kp.keyId + ' -> ' + (stateNames[kp.state] || kp.state));",
+            "});",
+            "",
+            "// Guardar el ID de la clave rotada para revocarla",
+            "var rotatedKp = kps.find(function(kp) { return kp.state === 300; });",
+            "if (rotatedKp) {",
+            "    pm.collectionVariables.set('keyPairId', rotatedKp.id);",
+            "    console.log('keyPairId actualizado a la clave ROTATED:', rotatedKp.id);",
+            "}"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/keypairs", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "keypairs"] },
+            "description": "## Listar claves tras la rotacion\n\n**Endpoint:** `GET /v1alpha/participants/{id}/keypairs`\n\n### Que verifica\n\nDespues de rotar, deberian haber al menos 2 claves:\n\n| Clave | Estado esperado |\n|-------|-----------------|\n| `acme-key-1` | ROTATED (300) |\n| `acme-key-rotated` | ACTIVE (200) |\n\n### Script de test\n\n- Verifica que hay al menos 2 claves\n- Muestra el estado de cada una\n- **Actualiza `keyPairId`** al ID de la clave ROTATED para poder revocarla en 3.5"
+          }
+        },
+        {
+          "name": "3.5 Revocar clave antigua",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Clave revocada (204)', function () {",
+            "    pm.response.to.have.status(204);",
+            "});",
+            "",
+            "console.log('Clave antigua -> REVOKED');",
+            "console.log('verificationMethod antiguo eliminado del DID Document');",
+            "console.log('Nueva clave sucesora acme-key-successor creada');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"keyId\": \"acme-key-successor\",\n  \"privateKeyAlias\": \"acme-alias-successor\",\n  \"keyGeneratorParams\": {\n    \"algorithm\": \"EC\",\n    \"curve\": \"secp256r1\"\n  },\n  \"active\": true\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/keypairs/{{keyPairId}}/revoke", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "keypairs", "{{keyPairId}}", "revoke"] },
+            "description": "## Revocar clave rotada\n\n**Endpoint:** `POST /v1alpha/participants/{id}/keypairs/{keyPairId}/revoke`\n\n### Que hace\n\nRevoca permanentemente la clave que estaba en estado `ROTATED` y genera una nueva sucesora.\n\n### Diferencia entre rotar y revocar\n\n| Accion | Estado resultante | verificationMethod | Puede reactivarse |\n|--------|------------------|--------------------|-------------------|\n| Rotar | ROTATED | Se mantiene en DID | No |\n| Revocar | REVOKED | **Se elimina del DID** | No |\n\n### Efectos internos\n\n1. Clave `ROTATED` -> `REVOKED`\n2. Evento `KeyPairRevoked` emitido\n3. `DidDocumentServiceImpl` elimina el verificationMethod antiguo\n4. Nueva clave `acme-key-successor` creada en estado ACTIVE\n\n### Respuesta esperada\n\n`204 No Content`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "CU4: Gestion de service endpoints",
+      "description": "# CU4: Gestion de service endpoints en el DID Document\n\n## Escenario\n\nUn participante necesita anunciar nuevos servicios en su DID Document, actualizar URLs existentes, o eliminar servicios obsoletos.\n\n## Flujo\n\n```\n4.1 Anadir endpoint       -> Nuevo service en el DID Document\n4.2 Verificar DID          -> Ver el endpoint anadido\n4.3 Actualizar endpoint    -> Cambiar la URL del servicio\n4.4 Eliminar endpoint      -> Quitar el servicio del DID Document\n4.5 Verificar DID final    -> Confirmar que se elimino\n```\n\n## Parametro autoPublish\n\nTodas las operaciones de endpoints aceptan `?autoPublish=true`.\n\n- Con `autoPublish=true`: el DID Document se re-publica inmediatamente\n- Sin `autoPublish` o `false`: el cambio queda en la base de datos pero no se refleja publicamente hasta la proxima publicacion\n\n## Prerequisitos\n\n- CU1 ejecutado (participante acme-corp creado y activado)",
+      "item": [
+        {
+          "name": "4.1 Anadir service endpoint",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Endpoint anadido (204)', function () {",
+            "    pm.response.to.have.status(204);",
+            "});",
+            "",
+            "console.log('Service endpoint issuance-service anadido al DID Document');",
+            "console.log('DID Document re-publicado automaticamente (autoPublish=true)');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"issuance-service\",\n  \"type\": \"CredentialIssuance\",\n  \"serviceEndpoint\": \"http://acme.example.com/api/issuance\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/{{participantDid}}/endpoints?autoPublish=true",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "{{participantDid}}", "endpoints"],
+              "query": [{ "key": "autoPublish", "value": "true" }]
+            },
+            "description": "## Anadir un service endpoint\n\n**Endpoint:** `POST /v1alpha/participants/{id}/dids/{did}/endpoints?autoPublish=true`\n\n### Body\n\n| Campo | Valor | Descripcion |\n|-------|-------|-------------|\n| `id` | `issuance-service` | Identificador unico del servicio |\n| `type` | `CredentialIssuance` | Tipo del servicio (libre) |\n| `serviceEndpoint` | `http://...` | URL del servicio |\n\n### Resultado\n\nEl DID Document tendra un nuevo elemento en su array `service`.\n\n### Respuesta esperada\n\n`204 No Content`\n\n### Error comun\n\n`409 Conflict` si ya existe un endpoint con el mismo `id`."
+          }
+        },
+        {
+          "name": "4.2 Verificar DID con nuevo endpoint",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var docs = pm.response.json();",
+            "",
+            "if (docs.length > 0 && docs[0].service) {",
+            "    pm.test('DID tiene al menos 2 service endpoints', function () {",
+            "        pm.expect(docs[0].service.length).to.be.at.least(2);",
+            "    });",
+            "",
+            "    var issuanceSvc = docs[0].service.find(function(s) { return s.id === 'issuance-service'; });",
+            "    pm.test('Endpoint issuance-service existe', function () {",
+            "        pm.expect(issuanceSvc).to.not.be.undefined;",
+            "    });",
+            "",
+            "    console.log('Service endpoints:');",
+            "    docs[0].service.forEach(function(s, i) {",
+            "        console.log('  [' + i + '] ' + s.id + ' (' + s.type + ') -> ' + s.serviceEndpoint);",
+            "    });",
+            "}"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"offset\": 0,\n  \"limit\": 50\n}" },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/query", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "query"] },
+            "description": "## Verificar que el endpoint se anadio\n\nConsulta el DID Document y verifica que ahora tiene 2 service endpoints:\n1. `credential-service` (del CU1)\n2. `issuance-service` (recien anadido)"
+          }
+        },
+        {
+          "name": "4.3 Actualizar service endpoint",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Endpoint actualizado (204)', function () {",
+            "    pm.response.to.have.status(204);",
+            "});",
+            "",
+            "console.log('URL del endpoint issuance-service actualizada a /v2');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"issuance-service\",\n  \"type\": \"CredentialIssuance\",\n  \"serviceEndpoint\": \"http://acme.example.com/api/issuance/v2\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/{{participantDid}}/endpoints?autoPublish=true",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "{{participantDid}}", "endpoints"],
+              "query": [{ "key": "autoPublish", "value": "true" }]
+            },
+            "description": "## Actualizar un service endpoint\n\n**Endpoint:** `PATCH /v1alpha/participants/{id}/dids/{did}/endpoints?autoPublish=true`\n\n### Que hace\n\nReemplaza el service endpoint con el `id` indicado. En este caso, cambia la URL del servicio `issuance-service` de `/api/issuance` a `/api/issuance/v2`.\n\n### Nota\n\nSe debe enviar el objeto completo del servicio (id, type, serviceEndpoint). El `id` es el que identifica cual endpoint reemplazar.\n\n### Respuesta esperada\n\n`204 No Content`"
+          }
+        },
+        {
+          "name": "4.4 Eliminar service endpoint",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Endpoint eliminado (204)', function () {",
+            "    pm.response.to.have.status(204);",
+            "});",
+            "",
+            "console.log('Endpoint issuance-service eliminado del DID Document');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/{{participantDid}}/endpoints?serviceId=issuance-service&autoPublish=true",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "{{participantDid}}", "endpoints"],
+              "query": [
+                { "key": "serviceId", "value": "issuance-service" },
+                { "key": "autoPublish", "value": "true" }
+              ]
+            },
+            "description": "## Eliminar un service endpoint\n\n**Endpoint:** `DELETE /v1alpha/participants/{id}/dids/{did}/endpoints?serviceId={serviceId}&autoPublish=true`\n\n### Parametros query\n\n| Parametro | Valor | Descripcion |\n|-----------|-------|-------------|\n| `serviceId` | `issuance-service` | ID del servicio a eliminar |\n| `autoPublish` | `true` | Re-publicar DID inmediatamente |\n\n### Respuesta esperada\n\n`204 No Content`"
+          }
+        },
+        {
+          "name": "4.5 Verificar DID sin el endpoint eliminado",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var docs = pm.response.json();",
+            "",
+            "if (docs.length > 0 && docs[0].service) {",
+            "    var issuanceSvc = docs[0].service.find(function(s) { return s.id === 'issuance-service'; });",
+            "    pm.test('Endpoint issuance-service ya no existe', function () {",
+            "        pm.expect(issuanceSvc).to.be.undefined;",
+            "    });",
+            "",
+            "    console.log('Service endpoints restantes:');",
+            "    docs[0].service.forEach(function(s, i) {",
+            "        console.log('  [' + i + '] ' + s.id + ' -> ' + s.serviceEndpoint);",
+            "    });",
+            "}"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"offset\": 0,\n  \"limit\": 50\n}" },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/query", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "query"] },
+            "description": "## Verificar eliminacion\n\nConsulta el DID Document y verifica que el endpoint `issuance-service` ya no esta presente. Solo debe quedar el `credential-service` original."
+          }
+        }
+      ]
+    },
+    {
+      "name": "CU5: Desactivacion temporal",
+      "description": "# CU5: Desactivacion temporal de un participante\n\n## Escenario\n\nUn participante necesita dejar de operar temporalmente por mantenimiento, incidente de seguridad, o cualquier otra razon. Se desactiva, lo que despublica sus DIDs, y luego se reactiva.\n\n## Flujo\n\n```\n5.1 Desactivar participante     -> ParticipantContext DEACTIVATED, DID UNPUBLISHED\n5.2 Verificar DID UNPUBLISHED   -> Confirmar que el DID ya no es resoluble\n5.3 Reactivar participante      -> ParticipantContext ACTIVATED, DID PUBLISHED\n5.4 Verificar DID PUBLISHED     -> Confirmar que el DID vuelve a ser resoluble\n```\n\n## Que sucede al desactivar\n\n1. `ParticipantContext` transiciona a `DEACTIVATED`\n2. Se emite evento `ParticipantContextUpdated`\n3. `DidDocumentServiceImpl` llama a `unpublish(did)` para todos los DIDs\n4. El DID Document deja de ser resoluble publicamente\n5. Las credenciales del participante dejan de ser verificables\n\n## Que sucede al reactivar\n\n1. `ParticipantContext` transiciona a `ACTIVATED`\n2. Se emite evento `ParticipantContextUpdated`\n3. `DidDocumentServiceImpl` llama a `publish(did)` para todos los DIDs\n4. El DID Document vuelve a ser resoluble\n\n## Prerequisitos\n\n- CU1 ejecutado (participante acme-corp creado y activado)",
+      "item": [
+        {
+          "name": "5.1 Desactivar participante",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Desactivado (204)', function () {",
+            "    pm.response.to.have.status(204);",
+            "});",
+            "",
+            "console.log('ParticipantContext -> DEACTIVATED');",
+            "console.log('Todos los DIDs despublicados automaticamente');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/state?isActive=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "state"],
+              "query": [{ "key": "isActive", "value": "false" }]
+            },
+            "description": "## Desactivar participante\n\n**Endpoint:** `POST /v1alpha/participants/{id}/state?isActive=false`\n\n### Efectos\n\n- ParticipantContext: `ACTIVATED` -> `DEACTIVATED`\n- Todos los DIDs: `PUBLISHED` -> `UNPUBLISHED`\n- Credenciales ya no son verificables por terceros\n\n### Respuesta esperada\n\n`204 No Content`"
+          }
+        },
+        {
+          "name": "5.2 Verificar DID en UNPUBLISHED",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var state = pm.response.text();",
+            "",
+            "pm.test('DID esta en UNPUBLISHED', function () {",
+            "    pm.expect(state).to.include('UNPUBLISHED');",
+            "});",
+            "",
+            "console.log('Estado del DID:', state);",
+            "console.log('El DID ya no es resoluble publicamente');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"did\": \"{{participantDid}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/state", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "state"] },
+            "description": "## Verificar DID despublicado\n\nTras desactivar el participante, el DID debe estar en **UNPUBLISHED**.\n\nEsto significa que el DID Document sigue existiendo en la base de datos, pero ya no es accesible publicamente."
+          }
+        },
+        {
+          "name": "5.3 Reactivar participante",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Reactivado (204)', function () {",
+            "    pm.response.to.have.status(204);",
+            "});",
+            "",
+            "console.log('ParticipantContext -> ACTIVATED');",
+            "console.log('Todos los DIDs re-publicados automaticamente');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/state?isActive=true",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "state"],
+              "query": [{ "key": "isActive", "value": "true" }]
+            },
+            "description": "## Reactivar participante\n\n**Endpoint:** `POST /v1alpha/participants/{id}/state?isActive=true`\n\n### Efectos\n\n- ParticipantContext: `DEACTIVATED` -> `ACTIVATED`\n- Todos los DIDs: `UNPUBLISHED` -> `PUBLISHED`\n- Credenciales vuelven a ser verificables\n\n### Respuesta esperada\n\n`204 No Content`"
+          }
+        },
+        {
+          "name": "5.4 Verificar DID en PUBLISHED de nuevo",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var state = pm.response.text();",
+            "",
+            "pm.test('DID esta en PUBLISHED de nuevo', function () {",
+            "    pm.expect(state).to.include('PUBLISHED');",
+            "});",
+            "",
+            "console.log('Estado del DID:', state);",
+            "console.log('El DID vuelve a ser resoluble publicamente');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"did\": \"{{participantDid}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/state", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "state"] },
+            "description": "## Verificar re-publicacion\n\nTras reactivar, el DID debe volver a **PUBLISHED**. El ciclo de desactivacion/reactivacion es completamente reversible."
+          }
+        }
+      ]
+    },
+    {
+      "name": "CU6: Baja definitiva",
+      "description": "# CU6: Baja definitiva de un participante\n\n## Escenario\n\nUna organizacion sale del dataspace permanentemente. Se elimina su ParticipantContext y todos los recursos asociados en cascada.\n\n## Flujo\n\n```\n6.1 Eliminar participante (fast-corp)  -> Eliminacion en cascada\n6.2 Verificar que ya no existe          -> 404 Not Found\n```\n\n## Que sucede internamente (en cascada)\n\n1. Se despublican todos los DIDs\n2. Se revocan todos los KeyPairs\n3. Se eliminan todas las VerifiableCredentials\n4. Se elimina el ParticipantContext\n5. Se elimina el API key del vault\n\n**Esta operacion es IRREVERSIBLE.**\n\n## Nota\n\nEste caso de uso elimina el participante `fast-corp` (creado en CU2), no `acme-corp`, para que los demas CUs puedan seguir ejecutandose.\n\n## Prerequisitos\n\n- CU2 ejecutado (participante fast-corp creado)",
+      "item": [
+        {
+          "name": "6.1 Eliminar participante (fast-corp)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Eliminado (204)', function () {",
+            "    pm.response.to.have.status(204);",
+            "});",
+            "",
+            "console.log('Participante fast-corp eliminado permanentemente');",
+            "console.log('Cascada: DIDs despublicados, claves revocadas, credenciales eliminadas');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{activeParticipantIdBase64}}", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{activeParticipantIdBase64}}"] },
+            "description": "## Eliminar participante\n\n**Endpoint:** `DELETE /v1alpha/participants/{id}`\n\n### Operacion irreversible\n\nElimina el ParticipantContext `fast-corp` y todos sus recursos en cascada:\n\n1. DIDs despublicados\n2. KeyPairs revocados\n3. VerifiableCredentials eliminadas\n4. ParticipantContext eliminado\n5. API key eliminada del vault\n\n### Respuesta esperada\n\n`204 No Content`"
+          }
+        },
+        {
+          "name": "6.2 Verificar que ya no existe",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('No encontrado (404)', function () {",
+            "    pm.response.to.have.status(404);",
+            "});",
+            "",
+            "console.log('Confirmado: el participante fast-corp ya no existe');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{activeParticipantIdBase64}}", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{activeParticipantIdBase64}}"] },
+            "description": "## Verificar eliminacion\n\nIntenta obtener el participante eliminado. Debe devolver **404 Not Found**, confirmando que la eliminacion fue completa."
+          }
+        }
+      ]
+    },
+    {
+      "name": "CU7: Admin multi-tenant",
+      "description": "# CU7: Administracion multi-tenant\n\n## Escenario\n\nEl administrador del sistema necesita una vision global de todos los participantes y sus recursos. Estos endpoints cross-tenant requieren rol `admin`.\n\n## Flujo\n\n```\n7.1 Listar todos los participantes  -> Vision global de organizaciones\n7.2 Listar todos los DIDs (global)  -> Todos los DID Documents del sistema\n7.3 Listar todos los KeyPairs       -> Todas las claves del sistema\n7.4 Listar todas las credenciales   -> Todas las VCs del sistema\n```\n\n## Nota de seguridad\n\nEstos endpoints solo son accesibles con un token de un participante con rol `admin`. El super-user creado por el launcher de desarrollo tiene este rol.",
+      "item": [
+        {
+          "name": "7.1 Listar todos los participantes",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var data = pm.response.json();",
+            "",
+            "pm.test('La respuesta es un array', function () {",
+            "    pm.expect(data).to.be.an('array');",
+            "});",
+            "",
+            "console.log('Total participantes en el sistema:', data.length);",
+            "data.forEach(function(p, i) {",
+            "    console.log('  [' + i + '] ' + p.participantContextId + ' (state: ' + p.state + ')');",
+            "});"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1alpha/participants?offset=0&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1alpha", "participants"],
+              "query": [
+                { "key": "offset", "value": "0" },
+                { "key": "limit", "value": "50" }
+              ]
+            },
+            "description": "## Listar todos los participantes\n\n**Endpoint:** `GET /v1alpha/participants?offset=0&limit=50`\n\n**Requiere:** Rol `admin`\n\n### Que devuelve\n\nArray de `IdentityHubParticipantContext` con todos los participantes registrados, incluyendo:\n- `participantContextId`: ID del participante\n- `did`: DID asociado\n- `state`: Estado (0=CREATED, 1=ACTIVATED, 2=DEACTIVATED)\n- `roles`: Roles asignados\n\n### Paginacion\n\n- `offset`: Indice de inicio (default: 0)\n- `limit`: Maximo de resultados (default: 50)"
+          }
+        },
+        {
+          "name": "7.2 Listar todos los DIDs (global)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var data = pm.response.json();",
+            "",
+            "pm.test('La respuesta es un array', function () {",
+            "    pm.expect(data).to.be.an('array');",
+            "});",
+            "",
+            "console.log('Total DIDs en el sistema:', data.length);",
+            "data.forEach(function(d, i) {",
+            "    console.log('  [' + i + '] ' + d.id);",
+            "});"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1alpha/dids?offset=0&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1alpha", "dids"],
+              "query": [
+                { "key": "offset", "value": "0" },
+                { "key": "limit", "value": "50" }
+              ]
+            },
+            "description": "## Listar todos los DIDs del sistema\n\n**Endpoint:** `GET /v1alpha/dids?offset=0&limit=50`\n\n**Requiere:** Rol `admin`\n\nDevuelve todos los DID Documents de todos los participantes, independientemente de su estado."
+          }
+        },
+        {
+          "name": "7.3 Listar todos los KeyPairs (global)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var data = pm.response.json();",
+            "",
+            "pm.test('La respuesta es un array', function () {",
+            "    pm.expect(data).to.be.an('array');",
+            "});",
+            "",
+            "var stateNames = { 100: 'CREATED', 200: 'ACTIVE', 300: 'ROTATED', 400: 'REVOKED' };",
+            "console.log('Total KeyPairs en el sistema:', data.length);",
+            "data.forEach(function(kp, i) {",
+            "    console.log('  [' + i + '] ' + kp.keyId + ' (' + (stateNames[kp.state] || kp.state) + ') - ' + kp.participantContextId);",
+            "});"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1alpha/keypairs?offset=0&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1alpha", "keypairs"],
+              "query": [
+                { "key": "offset", "value": "0" },
+                { "key": "limit", "value": "50" }
+              ]
+            },
+            "description": "## Listar todos los KeyPairs del sistema\n\n**Endpoint:** `GET /v1alpha/keypairs?offset=0&limit=50`\n\n**Requiere:** Rol `admin`\n\nDevuelve todos los KeyPairResources de todos los participantes, con su estado actual."
+          }
+        },
+        {
+          "name": "7.4 Listar todas las credenciales (global)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var data = pm.response.json();",
+            "",
+            "pm.test('La respuesta es un array', function () {",
+            "    pm.expect(data).to.be.an('array');",
+            "});",
+            "",
+            "console.log('Total VerifiableCredentials en el sistema:', data.length);"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/v1alpha/credentials?offset=0&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1alpha", "credentials"],
+              "query": [
+                { "key": "offset", "value": "0" },
+                { "key": "limit", "value": "50" }
+              ]
+            },
+            "description": "## Listar todas las credenciales del sistema\n\n**Endpoint:** `GET /v1alpha/credentials?offset=0&limit=50`\n\n**Requiere:** Rol `admin`\n\nDevuelve todas las VerifiableCredentials de todos los participantes."
+          }
+        }
+      ]
+    },
+    {
+      "name": "CU8: Regenerar token (compromiso)",
+      "description": "# CU8: Regeneracion de token API por compromiso de credenciales\n\n## Escenario\n\nSe sospecha que el API key de un participante ha sido comprometido. Se regenera inmediatamente para invalidar el token anterior.\n\n## Flujo\n\n```\n8.1 Regenerar API token  -> Nuevo token, token anterior invalidado\n```\n\n## Comportamiento\n\n- El token anterior queda invalidado **inmediatamente**\n- Se devuelve el nuevo token en texto plano\n- El script guarda automaticamente el nuevo token en la variable `participantToken`\n\n## Nota de autenticacion\n\nEsta peticion usa `{{participantToken}}` (el token del propio participante), no el `{{superUserToken}}`. El participante puede regenerar su propio token.\n\n## Prerequisitos\n\n- CU1 ejecutado (participantToken guardado automaticamente)",
+      "item": [
+        {
+          "name": "8.1 Regenerar API token",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Token regenerado (200)', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var newToken = pm.response.text();",
+            "",
+            "pm.test('Se devuelve un nuevo token', function () {",
+            "    pm.expect(newToken).to.be.a('string').that.is.not.empty;",
+            "});",
+            "",
+            "// Actualizar la variable con el nuevo token",
+            "pm.collectionVariables.set('participantToken', newToken);",
+            "",
+            "console.log('Token anterior INVALIDADO');",
+            "console.log('Nuevo token guardado en participantToken');",
+            "console.log('Primeros 30 chars:', newToken.substring(0, 30) + '...');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "x-api-key", "value": "{{participantToken}}" }],
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/token", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "token"] },
+            "description": "## Regenerar API token\n\n**Endpoint:** `POST /v1alpha/participants/{id}/token`\n\n**Autenticacion:** Token del propio participante (`x-api-key: {{participantToken}}`)\n\n### Que hace\n\n1. Genera un nuevo API token aleatorio\n2. Lo almacena en el vault, reemplazando el anterior\n3. Devuelve el nuevo token en texto plano\n4. **El token anterior queda invalidado inmediatamente**\n\n### Respuesta esperada (200)\n\n```\nYWNtZS1jb3Jw.nuevoTokenAleatorio...\n```\n\n### Script de test\n\n- Verifica que se devuelve un token no vacio\n- **Actualiza `participantToken`** con el nuevo valor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "CU9: Gestion de roles",
+      "description": "# CU9: Gestion de roles de participante\n\n## Escenario\n\nSe necesita otorgar privilegios de administrador a otro participante, o modificar sus roles.\n\n## Flujo\n\n```\n9.1 Asignar rol admin    -> Participante pasa a tener privilegios elevados\n9.2 Verificar roles      -> Confirmar que el rol se asigno\n9.3 Quitar todos los roles -> Volver a participante estandar\n```\n\n## Importante\n\nLa actualizacion de roles es un **reemplazo absoluto**. El array que se envia es el conjunto completo de roles que tendra el participante. No se pueden anadir/quitar roles individualmente.\n\n## Roles disponibles\n\n| Rol | Permisos |\n|-----|----------|\n| `admin` | Acceso a todos los endpoints, incluyendo cross-tenant |\n| (sin roles) | Solo acceso a sus propios recursos |\n\n## Prerequisitos\n\n- CU1 ejecutado (participante acme-corp creado)",
+      "item": [
+        {
+          "name": "9.1 Asignar rol admin",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Roles actualizados (204)', function () {",
+            "    pm.response.to.have.status(204);",
+            "});",
+            "",
+            "console.log('Participante acme-corp ahora tiene rol admin');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "[\"admin\"]" },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/roles", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "roles"] },
+            "description": "## Asignar rol de administrador\n\n**Endpoint:** `PUT /v1alpha/participants/{id}/roles`\n\n**Autenticacion:** Token del super-user\n\n### Body\n\n```json\n[\"admin\"]\n```\n\nArray con todos los roles que debe tener el participante. Es un **reemplazo absoluto**.\n\n### Respuesta esperada\n\n`204 No Content`"
+          }
+        },
+        {
+          "name": "9.2 Verificar participante con rol admin",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status 200', function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "",
+            "var participant = pm.response.json();",
+            "",
+            "pm.test('El participante tiene el rol admin', function () {",
+            "    pm.expect(participant.roles).to.include('admin');",
+            "});",
+            "",
+            "console.log('Roles actuales:', JSON.stringify(participant.roles));"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}"] },
+            "description": "## Verificar roles asignados\n\n**Endpoint:** `GET /v1alpha/participants/{id}`\n\nConsulta el participante y verifica que el campo `roles` contiene `admin`."
+          }
+        },
+        {
+          "name": "9.3 Quitar todos los roles",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Roles eliminados (204)', function () {",
+            "    pm.response.to.have.status(204);",
+            "});",
+            "",
+            "console.log('Todos los roles eliminados. Participante vuelve a ser estandar.');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-api-key", "value": "{{superUserToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "[]" },
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/roles", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}", "roles"] },
+            "description": "## Quitar todos los roles\n\n**Endpoint:** `PUT /v1alpha/participants/{id}/roles`\n\n### Body\n\n```json\n[]\n```\n\nArray vacio = sin roles = participante estandar.\n\n### Respuesta esperada\n\n`204 No Content`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cleanup: Limpieza",
+      "description": "# Limpieza de datos de prueba\n\nElimina los participantes creados durante la ejecucion de los casos de uso.\n\nAcepta tanto `204` (eliminado) como `404` (ya no existia) como resultado valido.",
+      "item": [
+        {
+          "name": "Eliminar acme-corp",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Eliminado o no existia (204 o 404)', function () {",
+            "    pm.expect(pm.response.code).to.be.oneOf([204, 404]);",
+            "});",
+            "",
+            "console.log('acme-corp limpiado');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{participantIdBase64}}"] },
+            "description": "Elimina el participante acme-corp. Acepta 204 (eliminado) o 404 (ya eliminado previamente en otro CU)."
+          }
+        },
+        {
+          "name": "Eliminar fast-corp",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Eliminado o no existia (204 o 404)', function () {",
+            "    pm.expect(pm.response.code).to.be.oneOf([204, 404]);",
+            "});",
+            "",
+            "console.log('fast-corp limpiado');"
+          ], "type": "text/javascript" }}],
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
+            "url": { "raw": "{{baseUrl}}/v1alpha/participants/{{activeParticipantIdBase64}}", "host": ["{{baseUrl}}"], "path": ["v1alpha", "participants", "{{activeParticipantIdBase64}}"] },
+            "description": "Elimina el participante fast-corp. Acepta 204 (eliminado) o 404 (ya eliminado en CU6)."
+          }
+        }
+      ]
+    }
+  ]
+}
