@@ -1,0 +1,1691 @@
+openapi: 3.0.1
+info:
+  title: Identity Hub - Identity API
+  description: |
+    API unificada del Identity Hub de Eclipse EDC para la gestion de identidades descentralizadas (DID),
+    participantes, claves criptograficas y credenciales verificables.
+
+    ## Autenticacion
+
+    Todas las peticiones requieren la cabecera `x-api-key` con el token del participante.
+    El formato del token es: `base64(participantContextId) + "." + base64(randomBytes)`.
+
+    Los IDs de participante en las URLs van codificados en **Base64**.
+
+    ## Launcher de desarrollo
+
+    Para obtener el token del super-user, usar el launcher `identityhub-dev`:
+    ```
+    ./gradlew :launcher:identityhub-dev:shadowJar
+    java -jar launcher/identityhub-dev/build/libs/identity-hub-dev.jar
+    ```
+    El API key aparece en los logs al arrancar.
+
+    ## Casos de uso
+
+    Esta especificacion documenta 9 casos de uso principales:
+
+    | CU | Descripcion |
+    |----|-------------|
+    | CU1 | Onboarding de un nuevo participante (creacion + activacion manual) |
+    | CU2 | Onboarding directo con auto-publish (`active: true`) |
+    | CU3 | Rotacion de claves criptograficas |
+    | CU4 | Gestion de service endpoints en DID Documents |
+    | CU5 | Desactivacion temporal de un participante |
+    | CU6 | Baja definitiva de un participante |
+    | CU7 | Administracion multi-tenant |
+    | CU8 | Regeneracion de token API |
+    | CU9 | Gestion de roles |
+  version: "1.0.0"
+  contact:
+    name: Eclipse EDC
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8182/api/identity
+    description: Servidor local de desarrollo (identity API)
+
+tags:
+  - name: Participant Context
+    description: |
+      Gestion del ciclo de vida de participantes. Un `ParticipantContext` representa
+      una organizacion dentro del Identity Hub.
+
+      **Casos de uso relacionados:** CU1, CU2, CU5, CU6, CU7, CU8, CU9
+  - name: DID
+    description: |
+      Gestion de DID Documents (W3C Decentralized Identifiers).
+      Los DIDs siguen el ciclo: INITIAL -> GENERATED -> PUBLISHED -> UNPUBLISHED.
+
+      **Casos de uso relacionados:** CU1, CU2, CU4, CU5
+  - name: Key Pairs
+    description: |
+      Gestion de pares de claves criptograficas asociados a participantes.
+      Las claves se usan como verificationMethods en los DID Documents.
+
+      **Casos de uso relacionados:** CU1, CU2, CU3
+  - name: Verifiable Credentials
+    description: |
+      Gestion de credenciales verificables (W3C Verifiable Credentials).
+      Incluye almacenamiento, consulta y solicitud de credenciales via DCP.
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  # ============================================================
+  # PARTICIPANT CONTEXT API
+  # ============================================================
+
+  /v1alpha/participants:
+    get:
+      summary: Listar todos los participantes
+      description: |
+        Obtiene todos los ParticipantContexts del sistema. Requiere acceso elevado (admin).
+
+        **Caso de uso: CU7 — Administracion multi-tenant**
+
+        El administrador obtiene una vision global de todos los participantes registrados.
+      operationId: getAllParticipants
+      tags:
+        - Participant Context
+      parameters:
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Lista de ParticipantContexts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/IdentityHubParticipantContext"
+              example:
+                - participantContextId: "acme-corp"
+                  did: "did:web:acme-corp"
+                  state: 1
+                  roles: []
+                  createdAt: 1700000000000
+                - participantContextId: "fast-corp"
+                  did: "did:web:fast-corp"
+                  state: 1
+                  roles: []
+                  createdAt: 1700000100000
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      summary: Crear un participante
+      description: |
+        Crea un nuevo ParticipantContext con sus claves, DID y service endpoints.
+
+        **Caso de uso: CU1 — Onboarding paso a paso**
+
+        Se crea el participante con `active: false`. Esto genera el par de claves y el DID Document
+        pero NO lo publica. El DID queda en estado `GENERATED`. Se necesita una llamada posterior
+        a `POST /state?isActive=true` para activar y publicar.
+
+        **Caso de uso: CU2 — Onboarding directo (auto-publish)**
+
+        Se crea el participante con `active: true`. En una sola peticion se realiza:
+        creacion del contexto + generacion de claves + publicacion del DID.
+
+        **Que sucede internamente:**
+        1. Se crea el `ParticipantContext` en estado `CREATED`
+        2. Se genera el par de claves (segun `keyGeneratorParams`)
+        3. Se crea el `DidDocument` con `verificationMethod` y `service`
+        4. Si `active: true`, se activa y publica automaticamente
+        5. Se devuelve un `apiKey` unico para este participante
+      operationId: createParticipant
+      tags:
+        - Participant Context
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParticipantManifest"
+            examples:
+              cu1_onboarding_manual:
+                summary: "CU1: Onboarding paso a paso (inactive)"
+                description: Crea participante inactivo. Requiere activacion posterior.
+                value:
+                  participantContextId: "acme-corp"
+                  did: "did:web:acme-corp"
+                  active: false
+                  roles: []
+                  keys:
+                    - keyId: "acme-key-1"
+                      privateKeyAlias: "acme-alias-1"
+                      keyGeneratorParams:
+                        algorithm: "EC"
+                        curve: "secp256r1"
+                      active: true
+                  serviceEndpoints:
+                    - id: "credential-service"
+                      type: "CredentialService"
+                      serviceEndpoint: "http://acme.example.com/api/credentials"
+              cu2_onboarding_directo:
+                summary: "CU2: Onboarding directo (auto-publish)"
+                description: Crea participante ya activo. DID se publica automaticamente.
+                value:
+                  participantContextId: "fast-corp"
+                  did: "did:web:fast-corp"
+                  active: true
+                  roles: []
+                  keys:
+                    - keyId: "fast-corp-key"
+                      privateKeyAlias: "fast-corp-alias"
+                      keyGeneratorParams:
+                        algorithm: "EC"
+                        curve: "secp256r1"
+                      active: true
+                  serviceEndpoints:
+                    - id: "credential-service"
+                      type: "CredentialService"
+                      serviceEndpoint: "http://fast-corp.example.com/api/credentials"
+      responses:
+        "201":
+          description: ParticipantContext creado. Se devuelve el API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateParticipantContextResponse"
+              example:
+                apiKey: "YWNtZS1jb3Jw.FEFndF7c9gjF..."
+                clientId: "did:web:acme-corp"
+                clientSecret: "rA3DHkJhkZPV..."
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Ya existe un participante con ese ID
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiErrorDetail"
+
+  /v1alpha/participants/{participantContextId}:
+    get:
+      summary: Obtener un participante por ID
+      description: |
+        Obtiene los detalles de un ParticipantContext especifico.
+
+        **Caso de uso: CU1 — Verificar estado del participante tras la creacion**
+      operationId: getParticipant
+      tags:
+        - Participant Context
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      responses:
+        "200":
+          description: Detalles del ParticipantContext
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityHubParticipantContext"
+              example:
+                participantContextId: "acme-corp"
+                did: "did:web:acme-corp"
+                state: 1
+                roles: []
+                createdAt: 1700000000000
+                lastModified: 1700000000000
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      summary: Eliminar un participante (baja definitiva)
+      description: |
+        Elimina un ParticipantContext y todos sus recursos asociados.
+
+        **Caso de uso: CU6 — Baja definitiva**
+
+        Una organizacion sale del dataspace permanentemente. Esta operacion es **irreversible**.
+
+        **Que sucede internamente (en cascada):**
+        1. Se despublican todos los DIDs
+        2. Se revocan todos los KeyPairs
+        3. Se eliminan todas las VerifiableCredentials
+        4. Se elimina el ParticipantContext
+        5. Se elimina el API key del vault
+      operationId: deleteParticipant
+      tags:
+        - Participant Context
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      responses:
+        "204":
+          description: Participante eliminado correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1alpha/participants/{participantContextId}/state:
+    post:
+      summary: Activar o desactivar un participante
+      description: |
+        Cambia el estado de un ParticipantContext entre ACTIVATED y DEACTIVATED.
+
+        **Caso de uso: CU1 (Paso 3) — Activar el participante**
+
+        Tras crear el participante con `active: false`, se activa con `isActive=true`.
+        Esto publica automaticamente todos los DIDs del participante.
+
+        **Caso de uso: CU5 — Desactivacion temporal**
+
+        Se desactiva con `isActive=false` por mantenimiento o incidente de seguridad.
+        Los DIDs se despublican automaticamente y las credenciales dejan de ser verificables.
+
+        **Que sucede al activar (isActive=true):**
+        - `ParticipantContext` transiciona a `ACTIVATED`
+        - Se emite evento `ParticipantContextUpdated`
+        - `DidDocumentServiceImpl` publica todos los DIDs
+
+        **Que sucede al desactivar (isActive=false):**
+        - `ParticipantContext` transiciona a `DEACTIVATED`
+        - Se emite evento `ParticipantContextUpdated`
+        - `DidDocumentServiceImpl` despublica todos los DIDs
+      operationId: activateParticipant
+      tags:
+        - Participant Context
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - name: isActive
+          in: query
+          required: true
+          schema:
+            type: boolean
+          description: "`true` para activar, `false` para desactivar"
+          examples:
+            activar:
+              summary: "CU1/CU5: Activar participante"
+              value: true
+            desactivar:
+              summary: "CU5: Desactivar participante"
+              value: false
+      responses:
+        "204":
+          description: Estado cambiado correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1alpha/participants/{participantContextId}/token:
+    post:
+      summary: Regenerar API token
+      description: |
+        Regenera el API token de un participante y devuelve el nuevo token.
+        El token anterior queda invalidado inmediatamente.
+
+        **Caso de uso: CU8 — Compromiso de credenciales**
+
+        Se sospecha que el API key ha sido comprometido. Se regenera para invalidar
+        el token anterior y obtener uno nuevo.
+      operationId: regenerateParticipantToken
+      tags:
+        - Participant Context
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      responses:
+        "200":
+          description: Nuevo API token generado
+          content:
+            application/json:
+              schema:
+                type: string
+              example: "YWNtZS1jb3Jw.newRandomToken..."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1alpha/participants/{participantContextId}/roles:
+    put:
+      summary: Actualizar roles de un participante
+      description: |
+        Actualiza los roles de un participante. **Reemplazo absoluto:** todos los roles
+        que debe tener el participante deben ir en el array.
+
+        **Caso de uso: CU9 — Gestion de roles**
+
+        Otorgar privilegios de administrador a otro participante, o modificar roles existentes.
+
+        **Roles disponibles:**
+        - `admin`: acceso total al sistema
+        - Sin roles: participante estandar
+      operationId: updateParticipantRoles
+      tags:
+        - Participant Context
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: string
+            examples:
+              otorgar_admin:
+                summary: "CU9: Otorgar rol de admin"
+                value: ["admin"]
+              quitar_roles:
+                summary: "CU9: Quitar todos los roles"
+                value: []
+      responses:
+        "204":
+          description: Roles actualizados correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ============================================================
+  # DID MANAGEMENT API
+  # ============================================================
+
+  /v1alpha/dids:
+    get:
+      summary: Listar todos los DIDs (cross-tenant)
+      description: |
+        Obtiene todos los DID Documents de todos los participantes. Requiere acceso elevado (admin).
+
+        **Caso de uso: CU7 — Administracion multi-tenant**
+      operationId: getAllDids
+      tags:
+        - DID
+      parameters:
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Lista de DID Documents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DidDocument"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1alpha/participants/{participantContextId}/dids/publish:
+    post:
+      summary: Publicar un DID
+      description: |
+        Publica un DID Document existente, haciendolo resoluble publicamente.
+        El DID debe existir previamente en la base de datos.
+
+        **Caso de uso: CU1 (alternativa al Paso 3)**
+
+        En lugar de activar el participante, se puede publicar el DID directamente.
+        Normalmente la publicacion ocurre automaticamente al activar el participante.
+
+        **Que sucede internamente:**
+        - `LocalDidPublisher` transiciona el DID a estado `PUBLISHED`
+        - El DID Document queda accesible via HTTP en la ruta `/.well-known/did.json`
+      operationId: publishDid
+      tags:
+        - DID
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DidRequestPayload"
+            example:
+              did: "did:web:acme-corp"
+      responses:
+        "204":
+          description: DID publicado correctamente
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: El DID no existe
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiErrorDetail"
+
+  /v1alpha/participants/{participantContextId}/dids/unpublish:
+    post:
+      summary: Despublicar un DID
+      description: |
+        Despublica un DID Document. El DID deja de ser resoluble publicamente.
+
+        **Caso de uso: CU5 — Desactivacion temporal**
+
+        Normalmente la despublicacion ocurre automaticamente al desactivar el participante,
+        pero se puede invocar manualmente si se necesita despublicar un DID individual.
+      operationId: unpublishDid
+      tags:
+        - DID
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DidRequestPayload"
+            example:
+              did: "did:web:acme-corp"
+      responses:
+        "204":
+          description: DID despublicado correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1alpha/participants/{participantContextId}/dids/state:
+    post:
+      summary: Consultar estado de un DID
+      description: |
+        Obtiene el estado actual de un DID Document.
+
+        **Caso de uso: CU1 (Pasos 2 y 4)**
+
+        - Paso 2: Verificar que el DID esta en estado `GENERATED` (tras la creacion)
+        - Paso 4: Verificar que el DID esta en estado `PUBLISHED` (tras la activacion)
+
+        **Estados posibles:**
+        - `INITIAL` (100): Estado inicial
+        - `GENERATED` (200): DID creado pero no publicado
+        - `PUBLISHED` (300): DID publicado y resoluble
+        - `UNPUBLISHED` (400): DID despublicado
+      operationId: getDidState
+      tags:
+        - DID
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DidRequestPayload"
+            example:
+              did: "did:web:acme-corp"
+      responses:
+        "200":
+          description: Estado del DID
+          content:
+            application/json:
+              example: "PUBLISHED"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1alpha/participants/{participantContextId}/dids/query:
+    post:
+      summary: Buscar DID Documents
+      description: |
+        Consulta los DID Documents del participante.
+
+        **Caso de uso: CU1 (Paso 5) — Consultar el DID Document completo**
+
+        Permite ver el DID Document W3C completo, incluyendo los `verificationMethod`
+        y los `service` endpoints.
+      operationId: queryDids
+      tags:
+        - DID
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuerySpec"
+            example:
+              offset: 0
+              limit: 50
+      responses:
+        "200":
+          description: Lista de DID Documents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DidDocument"
+              example:
+                - id: "did:web:acme-corp"
+                  "@context":
+                    - "https://www.w3.org/ns/did/v1"
+                  verificationMethod:
+                    - id: "did:web:acme-corp#acme-key-1"
+                      type: "JsonWebKey2020"
+                      controller: "did:web:acme-corp"
+                      publicKeyJwk:
+                        kty: "EC"
+                        crv: "P-256"
+                  service:
+                    - id: "credential-service"
+                      type: "CredentialService"
+                      serviceEndpoint: "http://acme.example.com/api/credentials"
+                  authentication:
+                    - "did:web:acme-corp#acme-key-1"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1alpha/participants/{participantContextId}/dids/{did}/endpoints:
+    post:
+      summary: Anadir service endpoint al DID
+      description: |
+        Anade un nuevo service endpoint al DID Document.
+
+        **Caso de uso: CU4 — Gestion de service endpoints**
+
+        Un participante necesita anunciar un nuevo servicio en su DID Document.
+        Con `autoPublish=true`, el DID Document se re-publica inmediatamente.
+      operationId: addDidEndpoint
+      tags:
+        - DID
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - $ref: "#/components/parameters/Did"
+        - $ref: "#/components/parameters/AutoPublish"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Service"
+            example:
+              id: "issuance-service"
+              type: "CredentialIssuance"
+              serviceEndpoint: "http://acme.example.com/api/issuance"
+      responses:
+        "204":
+          description: Endpoint anadido correctamente
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Ya existe un endpoint con ese ID
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiErrorDetail"
+
+    patch:
+      summary: Actualizar service endpoint del DID
+      description: |
+        Reemplaza un service endpoint existente en el DID Document.
+
+        **Caso de uso: CU4 — Actualizar URL de un servicio**
+      operationId: replaceDidEndpoint
+      tags:
+        - DID
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - $ref: "#/components/parameters/Did"
+        - $ref: "#/components/parameters/AutoPublish"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Service"
+            example:
+              id: "issuance-service"
+              type: "CredentialIssuance"
+              serviceEndpoint: "http://acme.example.com/api/issuance/v2"
+      responses:
+        "204":
+          description: Endpoint actualizado correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      summary: Eliminar service endpoint del DID
+      description: |
+        Elimina un service endpoint del DID Document.
+
+        **Caso de uso: CU4 — Eliminar un servicio obsoleto**
+      operationId: deleteDidEndpoint
+      tags:
+        - DID
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - $ref: "#/components/parameters/Did"
+        - name: serviceId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: ID del service endpoint a eliminar
+          example: "issuance-service"
+        - $ref: "#/components/parameters/AutoPublish"
+      responses:
+        "204":
+          description: Endpoint eliminado correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ============================================================
+  # KEYPAIR API
+  # ============================================================
+
+  /v1alpha/keypairs:
+    get:
+      summary: Listar todos los KeyPairs (cross-tenant)
+      description: |
+        Obtiene todos los KeyPairResources de todos los participantes. Requiere acceso elevado (admin).
+
+        **Caso de uso: CU7 — Administracion multi-tenant**
+      operationId: getAllKeyPairs
+      tags:
+        - Key Pairs
+      parameters:
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Lista de KeyPairResources
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/KeyPairResource"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1alpha/participants/{participantContextId}/keypairs:
+    get:
+      summary: Listar keypairs de un participante
+      description: |
+        Obtiene todos los KeyPairResources de un participante especifico.
+
+        **Caso de uso: CU3 (Paso 1) — Listar claves actuales**
+
+        Antes de rotar una clave, se consultan las claves existentes para obtener el ID
+        de la clave que se desea rotar.
+
+        **Estados de KeyPair:**
+        - `CREATED` (100): Creado pero no activo
+        - `ACTIVE` (200): Activo y en uso
+        - `ROTATED` (300): Rotado, ya no se usa para firmar
+        - `REVOKED` (400): Revocado permanentemente
+      operationId: queryKeyPairByParticipantContextId
+      tags:
+        - Key Pairs
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      responses:
+        "200":
+          description: Lista de KeyPairResources
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/KeyPairResource"
+              example:
+                - id: "kp-uuid-1234"
+                  keyId: "acme-key-1"
+                  participantContextId: "acme-corp"
+                  state: 200
+                  defaultPair: true
+                  privateKeyAlias: "acme-alias-1"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      summary: Anadir un nuevo keypair
+      description: |
+        Anade un nuevo par de claves a un participante. La clave se genera automaticamente
+        segun los parametros proporcionados, o se espera que la clave privada ya exista en el vault.
+
+        **Caso de uso: CU3 — Anadir clave adicional sin rotar las existentes**
+      operationId: addKeyPair
+      tags:
+        - Key Pairs
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - name: makeDefault
+          in: query
+          schema:
+            type: boolean
+          description: Si la nueva clave debe ser la clave por defecto
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeyDescriptor"
+            example:
+              keyId: "acme-key-2"
+              privateKeyAlias: "acme-alias-2"
+              keyGeneratorParams:
+                algorithm: "EC"
+                curve: "secp256r1"
+              active: true
+      responses:
+        "201":
+          description: KeyPair creado correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1alpha/participants/{participantContextId}/keypairs/{keyPairId}:
+    get:
+      summary: Obtener un keypair por ID
+      description: Obtiene los detalles de un KeyPairResource especifico.
+      operationId: getKeyPair
+      tags:
+        - Key Pairs
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - $ref: "#/components/parameters/KeyPairId"
+      responses:
+        "200":
+          description: Detalles del KeyPairResource
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyPairResource"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1alpha/participants/{participantContextId}/keypairs/{keyPairId}/activate:
+    post:
+      summary: Activar un keypair
+      description: |
+        Establece un KeyPairResource en estado ACTIVE. Solo funciona si el estado actual
+        es ACTIVE o CREATED.
+      operationId: activateKeyPair
+      tags:
+        - Key Pairs
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - $ref: "#/components/parameters/KeyPairId"
+      responses:
+        "204":
+          description: KeyPair activado correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1alpha/participants/{participantContextId}/keypairs/{keyPairId}/rotate:
+    post:
+      summary: Rotar un keypair
+      description: |
+        Rota un par de claves, retirandolo y creando opcionalmente un nuevo sucesor.
+
+        **Caso de uso: CU3 (Paso 2) — Rotar la clave**
+
+        La politica de seguridad exige rotar las claves cada cierto periodo.
+
+        **Que sucede internamente:**
+        1. La clave antigua pasa a estado `ROTATED`
+        2. Su clave privada se destruye del vault
+        3. Se crea una nueva clave sucesora (segun el body)
+        4. Se emite evento `KeyPairActivated`
+        5. `DidDocumentServiceImpl` anade el nuevo `verificationMethod` al DID Document
+        6. Se auto-publica el DID Document actualizado
+      operationId: rotateKeyPair
+      tags:
+        - Key Pairs
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - $ref: "#/components/parameters/KeyPairId"
+        - name: duration
+          in: query
+          schema:
+            type: integer
+            format: int64
+          description: Duracion en milisegundos antes de la rotacion automatica
+      requestBody:
+        required: true
+        description: Descriptor de la nueva clave sucesora
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeyDescriptor"
+            example:
+              keyId: "acme-key-rotated"
+              privateKeyAlias: "acme-alias-rotated"
+              keyGeneratorParams:
+                algorithm: "EC"
+                curve: "secp256r1"
+              active: true
+      responses:
+        "204":
+          description: Clave rotada correctamente. Nueva clave sucesora creada.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1alpha/participants/{participantContextId}/keypairs/{keyPairId}/revoke:
+    post:
+      summary: Revocar un keypair
+      description: |
+        Revoca un par de claves permanentemente y crea un nuevo sucesor.
+
+        **Caso de uso: CU3 (Paso 3) — Revocar la clave antigua**
+
+        Tras la rotacion, se puede revocar la clave antigua para eliminar su `verificationMethod`
+        del DID Document.
+
+        **Que sucede internamente:**
+        1. La clave pasa de `ROTATED` a `REVOKED`
+        2. Se emite evento `KeyPairRevoked`
+        3. `DidDocumentServiceImpl` elimina el `verificationMethod` antiguo del DID Document
+        4. Se crea una nueva clave sucesora
+      operationId: revokeKeyPair
+      tags:
+        - Key Pairs
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - $ref: "#/components/parameters/KeyPairId"
+      requestBody:
+        required: true
+        description: Descriptor de la nueva clave sucesora
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeyDescriptor"
+            example:
+              keyId: "acme-key-successor"
+              privateKeyAlias: "acme-alias-successor"
+              keyGeneratorParams:
+                algorithm: "EC"
+                curve: "secp256r1"
+              active: true
+      responses:
+        "204":
+          description: Clave revocada correctamente. Nueva clave sucesora creada.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ============================================================
+  # VERIFIABLE CREDENTIALS API
+  # ============================================================
+
+  /v1alpha/credentials:
+    get:
+      summary: Listar todas las credenciales (cross-tenant)
+      description: |
+        Obtiene todas las VerifiableCredentials de todos los participantes. Requiere acceso elevado (admin).
+
+        **Caso de uso: CU7 — Administracion multi-tenant**
+      operationId: getAllCredentials
+      tags:
+        - Verifiable Credentials
+      parameters:
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Lista de VerifiableCredentialResources
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VerifiableCredentialResource"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1alpha/participants/{participantContextId}/credentials:
+    get:
+      summary: Consultar credenciales por tipo
+      description: Obtiene las VerifiableCredentials de un participante, opcionalmente filtradas por tipo.
+      operationId: queryCredentialsByType
+      tags:
+        - Verifiable Credentials
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - name: type
+          in: query
+          schema:
+            type: string
+          description: Tipo de credencial para filtrar
+      responses:
+        "200":
+          description: Lista de credenciales
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VerifiableCredentialResource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      summary: Anadir una credencial verificable
+      description: Anade una nueva VerifiableCredential al sistema.
+      operationId: addCredential
+      tags:
+        - Verifiable Credentials
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifiableCredentialManifest"
+      responses:
+        "204":
+          description: Credencial anadida correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Ya existe una credencial con ese ID
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiErrorDetail"
+
+    put:
+      summary: Actualizar una credencial verificable
+      description: Actualiza una VerifiableCredential existente.
+      operationId: updateCredential
+      tags:
+        - Verifiable Credentials
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifiableCredentialManifest"
+      responses:
+        "204":
+          description: Credencial actualizada correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1alpha/participants/{participantContextId}/credentials/request:
+    post:
+      summary: Solicitar una credencial al issuer
+      description: |
+        Dispara una solicitud de credencial que se envia al issuer via el protocolo DCP.
+      operationId: requestCredential
+      tags:
+        - Verifiable Credentials
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CredentialRequestDto"
+            example:
+              issuerDid: "did:web:trusted-issuer"
+              holderPid: "request-001"
+              credentials:
+                - id: "membership-vc"
+                  type: "MembershipCredential"
+                  format: "VC2_0_JOSE"
+      responses:
+        "201":
+          description: Solicitud enviada al issuer. Se devuelve el issuerPid.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1alpha/participants/{participantContextId}/credentials/request/{holderPid}:
+    get:
+      summary: Consultar estado de solicitud de credencial
+      description: Obtiene el estado de una solicitud de credencial por su holderPid.
+      operationId: getCredentialRequest
+      tags:
+        - Verifiable Credentials
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - name: holderPid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID de la solicitud asignado por el holder
+      responses:
+        "200":
+          description: Estado de la solicitud
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifiableCredentialResource"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1alpha/participants/{participantContextId}/credentials/{credentialId}:
+    get:
+      summary: Obtener una credencial por ID
+      description: Obtiene los detalles de una VerifiableCredential especifica.
+      operationId: getCredential
+      tags:
+        - Verifiable Credentials
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - name: credentialId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Detalles de la credencial
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifiableCredentialResource"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      summary: Eliminar una credencial
+      description: Elimina una VerifiableCredential del sistema.
+      operationId: deleteCredential
+      tags:
+        - Verifiable Credentials
+      parameters:
+        - $ref: "#/components/parameters/ParticipantContextId"
+        - name: credentialId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Credencial eliminada correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+# ============================================================
+# COMPONENTS
+# ============================================================
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: |
+        Token de autenticacion del participante.
+        Formato: `base64(participantContextId) + "." + base64(randomBytes)`
+
+  parameters:
+    ParticipantContextId:
+      name: participantContextId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: ID del participante codificado en Base64
+      example: "YWNtZS1jb3Jw"
+
+    KeyPairId:
+      name: keyPairId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: UUID del KeyPairResource
+
+    Did:
+      name: did
+      in: path
+      required: true
+      schema:
+        type: string
+      description: DID completo (ej. `did:web:acme-corp`)
+      example: "did:web:acme-corp"
+
+    AutoPublish:
+      name: autoPublish
+      in: query
+      schema:
+        type: boolean
+        default: false
+      description: Si `true`, re-publica el DID Document inmediatamente tras el cambio
+
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        format: int32
+        default: 0
+      description: Indice de inicio para paginacion
+
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        format: int32
+        default: 50
+      description: Numero maximo de resultados
+
+  responses:
+    BadRequest:
+      description: Peticion malformada o error de validacion
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/ApiErrorDetail"
+
+    Unauthorized:
+      description: Sin autenticacion o token invalido
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/ApiErrorDetail"
+
+    Forbidden:
+      description: Sin autorizacion (no es propietario del recurso)
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/ApiErrorDetail"
+
+    NotFound:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/ApiErrorDetail"
+
+  schemas:
+    ApiErrorDetail:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Mensaje descriptivo del error
+        type:
+          type: string
+          description: Tipo del error
+        path:
+          type: string
+          description: Ruta del campo con error
+        invalidValue:
+          type: object
+          description: Valor invalido que causo el error
+
+    ParticipantManifest:
+      type: object
+      description: Manifiesto para crear un nuevo participante
+      required:
+        - participantContextId
+        - did
+      properties:
+        participantContextId:
+          type: string
+          description: Identificador unico del participante
+          example: "acme-corp"
+        did:
+          type: string
+          description: DID del participante (ej. `did:web:acme-corp`)
+          example: "did:web:acme-corp"
+        active:
+          type: boolean
+          description: |
+            Si `true`, el participante se activa y su DID se publica automaticamente.
+            Si `false`, requiere activacion posterior.
+          default: false
+        roles:
+          type: array
+          items:
+            type: string
+          description: Roles del participante (ej. `["admin"]`)
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/KeyDescriptor"
+          uniqueItems: true
+          description: Descriptores de claves a generar
+        serviceEndpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/Service"
+          uniqueItems: true
+          description: Service endpoints para el DID Document
+        additionalProperties:
+          type: object
+          additionalProperties:
+            type: object
+          description: Propiedades adicionales del participante
+        apiKeyAlias:
+          type: string
+          description: Alias opcional para la API key en el vault
+
+    CreateParticipantContextResponse:
+      type: object
+      description: Respuesta tras crear un participante
+      properties:
+        apiKey:
+          type: string
+          description: Token de autenticacion para este participante
+          example: "YWNtZS1jb3Jw.FEFndF7c9gjF..."
+        clientId:
+          type: string
+          description: Client ID (normalmente el DID)
+          example: "did:web:acme-corp"
+        clientSecret:
+          type: string
+          description: Client secret para OAuth2
+          example: "rA3DHkJhkZPV..."
+
+    IdentityHubParticipantContext:
+      type: object
+      description: Representacion de un ParticipantContext
+      properties:
+        participantContextId:
+          type: string
+        did:
+          type: string
+        state:
+          type: integer
+          format: int32
+          description: |
+            Estado del participante:
+            - `0`: CREATED
+            - `1`: ACTIVATED
+            - `2`: DEACTIVATED
+        roles:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: integer
+          format: int64
+        lastModified:
+          type: integer
+          format: int64
+        id:
+          type: string
+        apiTokenAlias:
+          type: string
+        properties:
+          type: object
+          additionalProperties:
+            type: object
+
+    KeyDescriptor:
+      type: object
+      description: |
+        Descriptor para generar o referenciar un par de claves.
+        Si se proporcionan `keyGeneratorParams`, la clave se genera automaticamente.
+        Si no, se espera que la clave privada exista en el vault bajo `privateKeyAlias`.
+      properties:
+        keyId:
+          type: string
+          description: Identificador de la clave (aparece en el verificationMethod)
+          example: "acme-key-1"
+        privateKeyAlias:
+          type: string
+          description: Alias en el vault para la clave privada
+          example: "acme-alias-1"
+        active:
+          type: boolean
+          description: Si la clave debe estar activa inmediatamente
+        keyGeneratorParams:
+          type: object
+          additionalProperties:
+            type: object
+          description: |
+            Parametros de generacion. Ejemplo para EC P-256:
+            `{"algorithm": "EC", "curve": "secp256r1"}`
+          example:
+            algorithm: "EC"
+            curve: "secp256r1"
+        publicKeyJwk:
+          type: object
+          additionalProperties:
+            type: object
+          description: Clave publica en formato JWK (si se proporciona externamente)
+        publicKeyPem:
+          type: string
+          description: Clave publica en formato PEM (alternativa a JWK)
+        resourceId:
+          type: string
+        type:
+          type: string
+        usage:
+          type: array
+          items:
+            type: string
+            enum:
+              - sign_credentials
+              - sign_presentation
+              - sign_token
+          uniqueItems: true
+          description: Usos permitidos para la clave
+
+    KeyPairResource:
+      type: object
+      description: Recurso que representa un par de claves
+      properties:
+        id:
+          type: string
+          description: UUID del recurso
+        keyId:
+          type: string
+          description: Identificador de la clave
+        participantContextId:
+          type: string
+        state:
+          type: integer
+          format: int32
+          description: |
+            Estado de la clave:
+            - `100`: CREATED
+            - `200`: ACTIVE
+            - `300`: ROTATED
+            - `400`: REVOKED
+        defaultPair:
+          type: boolean
+          description: Si es la clave por defecto del participante
+        privateKeyAlias:
+          type: string
+        serializedPublicKey:
+          type: string
+          description: Clave publica serializada (JWK)
+        groupName:
+          type: string
+        keyContext:
+          type: string
+        rotationDuration:
+          type: integer
+          format: int64
+        useDuration:
+          type: integer
+          format: int64
+        createdAt:
+          type: integer
+          format: int64
+        timestamp:
+          type: integer
+          format: int64
+        usage:
+          type: array
+          items:
+            type: string
+            enum:
+              - sign_credentials
+              - sign_presentation
+              - sign_token
+          uniqueItems: true
+
+    DidDocument:
+      type: object
+      description: DID Document segun la especificacion W3C DID Core
+      properties:
+        "@context":
+          type: array
+          items:
+            type: object
+        id:
+          type: string
+          description: DID del documento
+          example: "did:web:acme-corp"
+        verificationMethod:
+          type: array
+          items:
+            $ref: "#/components/schemas/VerificationMethod"
+        authentication:
+          type: array
+          items:
+            type: string
+        service:
+          type: array
+          items:
+            $ref: "#/components/schemas/Service"
+
+    VerificationMethod:
+      type: object
+      description: Metodo de verificacion en un DID Document
+      properties:
+        id:
+          type: string
+          example: "did:web:acme-corp#acme-key-1"
+        type:
+          type: string
+          example: "JsonWebKey2020"
+        controller:
+          type: string
+          example: "did:web:acme-corp"
+        publicKeyJwk:
+          type: object
+          additionalProperties:
+            type: object
+        publicKeyMultibase:
+          type: string
+
+    Service:
+      type: object
+      description: Service endpoint en un DID Document
+      properties:
+        id:
+          type: string
+          example: "credential-service"
+        type:
+          type: string
+          example: "CredentialService"
+        serviceEndpoint:
+          type: string
+          example: "http://acme.example.com/api/credentials"
+
+    DidRequestPayload:
+      type: object
+      description: Payload con el DID para operaciones de publicacion/estado
+      required:
+        - did
+      properties:
+        did:
+          type: string
+          example: "did:web:acme-corp"
+
+    QuerySpec:
+      type: object
+      description: Especificacion de consulta con paginacion y filtros
+      properties:
+        offset:
+          type: integer
+          format: int32
+          default: 0
+        limit:
+          type: integer
+          format: int32
+          default: 50
+        sortField:
+          type: string
+        sortOrder:
+          type: string
+          enum:
+            - ASC
+            - DESC
+        filterExpression:
+          type: array
+          items:
+            $ref: "#/components/schemas/Criterion"
+
+    Criterion:
+      type: object
+      properties:
+        operandLeft:
+          type: object
+        operandRight:
+          type: object
+        operator:
+          type: string
+
+    CredentialRequestDto:
+      type: object
+      description: Solicitud de credencial al issuer via DCP
+      required:
+        - issuerDid
+        - credentials
+      properties:
+        issuerDid:
+          type: string
+          description: DID del issuer al que solicitar la credencial
+        holderPid:
+          type: string
+          description: ID local de la solicitud
+        credentials:
+          type: array
+          items:
+            $ref: "#/components/schemas/CredentialDescriptor"
+
+    CredentialDescriptor:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        format:
+          type: string
+
+    VerifiableCredentialResource:
+      type: object
+      description: Recurso que envuelve una VerifiableCredential con metadatos
+      properties:
+        id:
+          type: string
+        participantContextId:
+          type: string
+        holderId:
+          type: string
+        issuerId:
+          type: string
+        state:
+          type: integer
+          format: int32
+        verifiableCredential:
+          $ref: "#/components/schemas/VerifiableCredentialContainer"
+        issuancePolicy:
+          type: object
+        reissuancePolicy:
+          type: object
+        createdAt:
+          type: integer
+          format: int64
+        timestamp:
+          type: integer
+          format: int64
+
+    VerifiableCredentialContainer:
+      type: object
+      properties:
+        credential:
+          type: object
+          description: Credencial verificable segun W3C VC Data Model
+        format:
+          type: string
+          enum:
+            - VC1_0_LD
+            - VC1_0_JWT
+            - VC2_0_JOSE
+            - VC2_0_SD_JWT
+            - VC2_0_COSE
+        rawVc:
+          type: string
+          description: Credencial en formato raw (JWT, SD-JWT, etc.)
+
+    VerifiableCredentialManifest:
+      type: object
+      properties:
+        id:
+          type: string
+        participantContextId:
+          type: string
+        verifiableCredentialContainer:
+          $ref: "#/components/schemas/VerifiableCredentialContainer"
+        issuancePolicy:
+          type: object
+        reissuancePolicy:
+          type: object

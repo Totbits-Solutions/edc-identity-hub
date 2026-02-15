@@ -115,6 +115,7 @@ include(":extensions:issuance:local-statuslist-publisher")
 
 // other modules
 include(":launcher:identityhub")
+include(":launcher:identityhub-dev")
 include(":launcher:identityhub-oauth2")
 include(":launcher:issuer-service")
 include(":launcher:issuer-service-oauth2")
