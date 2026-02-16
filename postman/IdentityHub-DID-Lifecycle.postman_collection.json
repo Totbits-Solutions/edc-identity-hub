@@ -15,16 +15,23 @@
     { "key": "keyPairId", "value": "", "description": "UUID del KeyPair activo (se guarda automaticamente en CU3)" },
     { "key": "activeParticipantId", "value": "fast-corp", "description": "ID del participante de prueba para CU2 (onboarding directo)" },
     { "key": "activeParticipantDid", "value": "did:web:fast-corp", "description": "DID del participante de prueba para CU2" },
-    { "key": "activeParticipantIdBase64", "value": "", "description": "activeParticipantId codificado en Base64 (calculado automaticamente)" }
+    { "key": "activeParticipantIdBase64", "value": "", "description": "activeParticipantId codificado en Base64 (calculado automaticamente)" },
+    { "key": "participantDidBase64", "value": "", "description": "participantDid codificado en Base64 (calculado automaticamente)" },
+    { "key": "activeParticipantDidBase64", "value": "", "description": "activeParticipantDid codificado en Base64 (calculado automaticamente)" }
   ],
   "event": [
     {
       "listen": "prerequest",
       "script": {
         "exec": [
-          "// Calcula Base64 de los IDs de participante para usar en las URLs",
-          "pm.variables.set('participantIdBase64', btoa(pm.collectionVariables.get('participantId')));",
-          "pm.variables.set('activeParticipantIdBase64', btoa(pm.collectionVariables.get('activeParticipantId')));"
+          "// Funcion helper: Base64 URL-safe sin padding (como Java Base64.getUrlEncoder().withoutPadding())",
+          "function toBase64Url(str) { return btoa(str).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, ''); }",
+          "",
+          "// Calcula Base64 URL-safe de los IDs de participante y DIDs para usar en las URLs",
+          "pm.variables.set('participantIdBase64', toBase64Url(pm.collectionVariables.get('participantId')));",
+          "pm.variables.set('activeParticipantIdBase64', toBase64Url(pm.collectionVariables.get('activeParticipantId')));",
+          "pm.variables.set('participantDidBase64', toBase64Url(pm.collectionVariables.get('participantDid')));",
+          "pm.variables.set('activeParticipantDidBase64', toBase64Url(pm.collectionVariables.get('activeParticipantDid')));"
         ],
         "type": "text/javascript"
       }
@@ -42,12 +49,19 @@
             "    pm.response.to.have.status(200);",
             "});",
             "",
-            "// Precalcular Base64 de IDs y guardarlos como variables de coleccion",
-            "pm.collectionVariables.set('participantIdBase64', btoa(pm.collectionVariables.get('participantId')));",
-            "pm.collectionVariables.set('activeParticipantIdBase64', btoa(pm.collectionVariables.get('activeParticipantId')));",
+            "// Funcion helper: Base64 URL-safe sin padding",
+            "function toBase64Url(str) { return btoa(str).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, ''); }",
+            "",
+            "// Precalcular Base64 URL-safe de IDs y DIDs y guardarlos como variables de coleccion",
+            "pm.collectionVariables.set('participantIdBase64', toBase64Url(pm.collectionVariables.get('participantId')));",
+            "pm.collectionVariables.set('activeParticipantIdBase64', toBase64Url(pm.collectionVariables.get('activeParticipantId')));",
+            "pm.collectionVariables.set('participantDidBase64', toBase64Url(pm.collectionVariables.get('participantDid')));",
+            "pm.collectionVariables.set('activeParticipantDidBase64', toBase64Url(pm.collectionVariables.get('activeParticipantDid')));",
             "",
             "console.log('participantIdBase64 =', pm.collectionVariables.get('participantIdBase64'));",
             "console.log('activeParticipantIdBase64 =', pm.collectionVariables.get('activeParticipantIdBase64'));",
+            "console.log('participantDidBase64 =', pm.collectionVariables.get('participantDidBase64'));",
+            "console.log('activeParticipantDidBase64 =', pm.collectionVariables.get('activeParticipantDidBase64'));",
             "console.log('Variables Base64 calculadas. Listo para ejecutar los casos de uso.');"
           ], "type": "text/javascript" }}],
           "request": {
@@ -464,9 +478,9 @@
               "raw": "{\n  \"id\": \"issuance-service\",\n  \"type\": \"CredentialIssuance\",\n  \"serviceEndpoint\": \"http://acme.example.com/api/issuance\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/{{participantDid}}/endpoints?autoPublish=true",
+              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/{{participantDidBase64}}/endpoints?autoPublish=true",
               "host": ["{{baseUrl}}"],
-              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "{{participantDid}}", "endpoints"],
+              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "{{participantDidBase64}}", "endpoints"],
               "query": [{ "key": "autoPublish", "value": "true" }]
             },
             "description": "## Anadir un service endpoint\n\n**Endpoint:** `POST /v1alpha/participants/{id}/dids/{did}/endpoints?autoPublish=true`\n\n### Body\n\n| Campo | Valor | Descripcion |\n|-------|-------|-------------|\n| `id` | `issuance-service` | Identificador unico del servicio |\n| `type` | `CredentialIssuance` | Tipo del servicio (libre) |\n| `serviceEndpoint` | `http://...` | URL del servicio |\n\n### Resultado\n\nEl DID Document tendra un nuevo elemento en su array `service`.\n\n### Respuesta esperada\n\n`204 No Content`\n\n### Error comun\n\n`409 Conflict` si ya existe un endpoint con el mismo `id`."
@@ -528,9 +542,9 @@
               "raw": "{\n  \"id\": \"issuance-service\",\n  \"type\": \"CredentialIssuance\",\n  \"serviceEndpoint\": \"http://acme.example.com/api/issuance/v2\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/{{participantDid}}/endpoints?autoPublish=true",
+              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/{{participantDidBase64}}/endpoints?autoPublish=true",
               "host": ["{{baseUrl}}"],
-              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "{{participantDid}}", "endpoints"],
+              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "{{participantDidBase64}}", "endpoints"],
               "query": [{ "key": "autoPublish", "value": "true" }]
             },
             "description": "## Actualizar un service endpoint\n\n**Endpoint:** `PATCH /v1alpha/participants/{id}/dids/{did}/endpoints?autoPublish=true`\n\n### Que hace\n\nReemplaza el service endpoint con el `id` indicado. En este caso, cambia la URL del servicio `issuance-service` de `/api/issuance` a `/api/issuance/v2`.\n\n### Nota\n\nSe debe enviar el objeto completo del servicio (id, type, serviceEndpoint). El `id` es el que identifica cual endpoint reemplazar.\n\n### Respuesta esperada\n\n`204 No Content`"
@@ -549,9 +563,9 @@
             "method": "DELETE",
             "header": [{ "key": "x-api-key", "value": "{{superUserToken}}" }],
             "url": {
-              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/{{participantDid}}/endpoints?serviceId=issuance-service&autoPublish=true",
+              "raw": "{{baseUrl}}/v1alpha/participants/{{participantIdBase64}}/dids/{{participantDidBase64}}/endpoints?serviceId=issuance-service&autoPublish=true",
               "host": ["{{baseUrl}}"],
-              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "{{participantDid}}", "endpoints"],
+              "path": ["v1alpha", "participants", "{{participantIdBase64}}", "dids", "{{participantDidBase64}}", "endpoints"],
               "query": [
                 { "key": "serviceId", "value": "issuance-service" },
                 { "key": "autoPublish", "value": "true" }

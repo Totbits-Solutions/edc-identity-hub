@@ -1,16 +1,5 @@
 # EDC Identity Hub
 
-[![documentation](https://img.shields.io/badge/documentation-8A2BE2?style=flat-square)](https://eclipse-edc.github.io)
-[![discord](https://img.shields.io/badge/discord-chat-brightgreen.svg?style=flat-square&logo=discord)](https://discord.gg/n4sD9qtjMQ)
-[![latest version](https://img.shields.io/maven-central/v/org.eclipse.edc/boot?logo=apache-maven&style=flat-square&label=latest%20version)](https://search.maven.org/artifact/org.eclipse.edc/boot)
-[![license](https://img.shields.io/github/license/eclipse-edc/IdentityHub?style=flat-square&logo=apache)](https://www.apache.org/licenses/LICENSE-2.0)
-<br>
-[![build](https://img.shields.io/github/actions/workflow/status/eclipse-edc/IdentityHub/verify.yaml?branch=main&logo=GitHub&style=flat-square&label=ci)](https://github.com/eclipse-edc/IdentityHub/actions/workflows/verify.yaml?query=branch%3Amain)
-[![snapshot build](https://img.shields.io/github/actions/workflow/status/eclipse-edc/IdentityHub/trigger_snapshot.yml?branch=main&logo=GitHub&style=flat-square&label=snapshot-build)](https://github.com/eclipse-edc/IdentityHub/actions/workflows/trigger_snapshot.yml)
-[![nightly build](https://img.shields.io/github/actions/workflow/status/eclipse-edc/Identity-Hub/nightly.yml?branch=main&logo=GitHub&style=flat-square&label=nightly-build)](https://github.com/eclipse-edc/IdentityHub/actions/workflows/nightly.yml)
-
----
-
 This repository contains an implementation for
 the [Decentralized Claims Protocol (DCP) specification](https://projects.eclipse.org/projects/technology.dataspace-dcp).
 In short, IdentityHub contains multiple VerifiableCredentials and
@@ -33,13 +22,13 @@ Este repositorio incluye un entorno de desarrollo, documentacion y una coleccion
 
 ### Documentacion generada
 
-| Fichero | Descripcion |
-|---------|-------------|
-| [Casos de uso (detallado)](docs/totbits/identity-hub-casos-de-uso.md) | Descripcion completa de los 9 casos de uso con diagramas de flujo y mecanismos internos |
-| [Ciclo de vida del DID](docs/totbits/did-lifecycle-and-resolution.md) | Estados, transiciones, eventos y codigo fuente del sistema DID |
-| [Referencia de endpoints](docs/totbits/identity-api-referencia.md) | Tabla completa de endpoints con roles, metodos HTTP y codigos de respuesta |
-| [OpenAPI spec](docs/totbits/identity-api-openapi.yaml) | Especificacion OpenAPI 3.0 unificada con ejemplos para cada caso de uso |
-| [Coleccion Postman](postman/IdentityHub-DID-Lifecycle.postman_collection.json) | Coleccion importable con scripts de automatizacion |
+| Fichero                                                                        | Descripcion                                                                             |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| [Casos de uso (detallado)](docs/totbits/identity-hub-casos-de-uso.md)          | Descripcion completa de los 9 casos de uso con diagramas de flujo y mecanismos internos |
+| [Ciclo de vida del DID](docs/totbits/did-lifecycle-and-resolution.md)          | Estados, transiciones, eventos y codigo fuente del sistema DID                          |
+| [Referencia de endpoints](docs/totbits/identity-api-referencia.md)             | Tabla completa de endpoints con roles, metodos HTTP y codigos de respuesta              |
+| [OpenAPI spec](docs/totbits/identity-api-openapi.yaml)                         | Especificacion OpenAPI 3.0 unificada con ejemplos para cada caso de uso                 |
+| [Coleccion Postman](postman/IdentityHub-DID-Lifecycle.postman_collection.json) | Coleccion importable con scripts de automatizacion                                      |
 
 ### Problema: el bootstrap del super-user
 
@@ -83,11 +72,11 @@ Copiar ese valor. Es necesario para todas las operaciones.
 
 #### APIs expuestas
 
-| API | URL | Descripcion |
-|-----|-----|-------------|
-| Management | `http://localhost:8181/api` | Health check, gestion general |
-| Identity | `http://localhost:8182/api/identity` | Participantes, DIDs, claves, credenciales |
-| Credentials | `http://localhost:10001/api/credentials` | Presentation API (DCP) |
+| API         | URL                                      | Descripcion                               |
+| ----------- | ---------------------------------------- | ----------------------------------------- |
+| Management  | `http://localhost:8181/api`              | Health check, gestion general             |
+| Identity    | `http://localhost:8182/api/identity`     | Participantes, DIDs, claves, credenciales |
+| Credentials | `http://localhost:10001/api/credentials` | Presentation API (DCP)                    |
 
 ### Autenticacion
 
